@@ -1,35 +1,13 @@
+pub mod app;
 pub mod ecs;
-use crate::ecs::{System, World};
+pub mod gfx;
+
+use crate::ecs::World;
 use std::any::{self, Any, TypeId};
+use std::fmt;
 use std::hash::{Hash, Hasher};
 
 pub fn init(_: &mut World) {}
-
-#[derive(Default)]
-pub struct App {
-    world: World,
-}
-
-impl App {
-    pub fn insert_resource<T: Any>(mut self, data: T) -> Self {
-        self.world.insert_resource(data);
-        self
-    }
-
-    pub fn insert_system_with<S: System, T: System>(mut self, with: S, sys: T) -> Self {
-        self.world.insert_system_with(with, sys);
-        self
-    }
-
-    pub fn insert_system_before<S: System, T: System>(mut self, before: S, sys: T) -> Self {
-        self.world.insert_system_before(before, sys);
-        self
-    }
-
-    pub fn run(mut self) {
-        self.world.run_system(init);
-    }
-}
 
 #[derive(Eq, Copy, Clone)]
 pub struct TypeIdNamed {
@@ -55,5 +33,11 @@ impl Hash for TypeIdNamed {
 impl PartialEq for TypeIdNamed {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
+    }
+}
+
+impl fmt::Debug for TypeIdNamed {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.name.fmt(f)
     }
 }
