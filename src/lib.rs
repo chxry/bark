@@ -1,11 +1,14 @@
+#![feature(unsafe_cell_access)]
 pub mod app;
 pub mod ecs;
 pub mod gfx;
 
 use crate::ecs::World;
 use std::any::{self, Any, TypeId};
+use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::iter::Peekable;
 
 pub fn init(_: &mut World) {}
 
@@ -39,5 +42,45 @@ impl PartialEq for TypeIdNamed {
 impl fmt::Debug for TypeIdNamed {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.name.fmt(f)
+    }
+}
+
+pub fn intersect<K: Eq + Ord, T, U, A: Iterator<Item = (K, T)>, B: Iterator<Item = (K, U)>>(
+    a: A,
+    b: B,
+) -> Intersect<K, T, U, A, B> {
+    Intersect {
+        a: a.peekable(),
+        b: b.peekable(),
+    }
+}
+
+pub struct Intersect<K: Eq + Ord, T, U, A: Iterator<Item = (K, T)>, B: Iterator<Item = (K, U)>> {
+    a: Peekable<A>,
+    b: Peekable<B>,
+}
+
+impl<K: Eq + Ord, T, U, A: Iterator<Item = (K, T)>, B: Iterator<Item = (K, U)>> Iterator
+    for Intersect<K, T, U, A, B>
+{
+    type Item = (K, (T, U));
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let (Some((ka, _)), Some((kb, _))) = (self.a.peek(), self.b.peek()) {
+            match ka.cmp(&kb) {
+                Ordering::Less => {
+                    self.a.next();
+                }
+                Ordering::Greater => {
+                    self.b.next();
+                }
+                Ordering::Equal => {
+                    let (k, t) = self.a.next().unwrap();
+                    let (_, u) = self.b.next().unwrap();
+                    return Some((k, (t, u)));
+                }
+            }
+        }
+        None
     }
 }

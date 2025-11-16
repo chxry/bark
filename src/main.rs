@@ -1,5 +1,5 @@
 use bark::ecs::World;
-use bark::{app, gfx};
+use bark::{app, gfx, intersect};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -14,18 +14,38 @@ fn main() {
     world.insert_resource("hi");
     world.insert_system_with(bark::init, app::init);
     world.insert_system_with(bark::init, gfx::init);
-    world.insert_system_with(bark::init, test);
     world.insert_system_before(gfx::submit_frame, main_pass);
+    world.insert_system_with(bark::init, test);
+    world.insert_system_with(app::update, update);
     world.run();
 }
 
 fn test(world: &mut World) {
-    world.spawn().insert(3);
-    world.spawn().insert(4).insert(5.0);
+    world
+        .spawn()
+        .insert(Position(0.0, 0.0))
+        .insert(Velocity(1.0, 1.0));
+    world
+        .spawn()
+        .insert(Position(5.0, 5.0))
+        .insert(Velocity(-0.5, 0.0));
+}
 
-    info!("{:?}", world.get::<i32>().collect::<Vec<_>>());
-    info!("{:?}", world.get::<f64>().collect::<Vec<_>>());
-    info!("{:?}", world.get_resource::<&str>());
+#[derive(Debug, Clone, Copy)]
+struct Position(f32, f32);
+
+#[derive(Debug, Clone, Copy)]
+struct Velocity(f32, f32);
+
+fn update(world: &mut World) {
+    let positions = world.get_mut::<Position>();
+    let velocities = world.get::<Velocity>();
+    for (_, (p, v)) in intersect(positions, velocities) {
+        p.0 += v.0;
+        p.1 += v.1;
+    }
+
+    info!("{:?}", world.get::<Position>().collect::<Vec<_>>());
 }
 
 fn main_pass(world: &mut World) {

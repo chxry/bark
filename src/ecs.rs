@@ -1,5 +1,6 @@
 use crate::{TypeIdNamed, init};
 use std::any::{self, Any};
+use std::cell::UnsafeCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use tracing::{debug, error, trace};
@@ -7,7 +8,7 @@ use tracing::{debug, error, trace};
 #[derive(Default)]
 pub struct World {
     entity_id: u64,
-    components: HashMap<TypeIdNamed, Box<dyn Any>>,
+    components: HashMap<TypeIdNamed, Box<UnsafeCell<dyn Any>>>,
     resources: HashMap<TypeIdNamed, Box<dyn Any>>,
     systems: HashMap<TypeIdNamed, SystemInfo>,
     systems_queue: VecDeque<TypeIdNamed>,
@@ -30,7 +31,8 @@ impl World {
         let storage = self
             .components
             .entry(type_id)
-            .or_insert_with(|| Box::new(Storage::<T>::new()));
+            .or_insert_with(|| Box::new(UnsafeCell::new(Storage::<T>::new())))
+            .get_mut();
         let storage = storage.downcast_mut::<Storage<_>>().unwrap();
         storage.insert(entity_id, data);
     }
@@ -38,7 +40,26 @@ impl World {
     pub fn get<T: Any>(&self) -> impl Iterator<Item = (EntityId, &T)> {
         self.components
             .get(&TypeIdNamed::of::<T>())
-            .map(|s| s.downcast_ref::<Storage<_>>().unwrap().iter())
+            .map(|s| {
+                unsafe { s.as_ref_unchecked() }
+                    .downcast_ref::<Storage<T>>()
+                    .unwrap()
+                    .iter()
+            })
+            .into_iter()
+            .flatten()
+    }
+
+    pub fn get_mut<T: Any>(&self) -> impl Iterator<Item = (EntityId, &mut T)> {
+        self.components
+            .get(&TypeIdNamed::of::<T>())
+            .map(|s| {
+                // todo
+                unsafe { s.as_mut_unchecked() }
+                    .downcast_mut::<Storage<T>>()
+                    .unwrap()
+                    .iter_mut()
+            })
             .into_iter()
             .flatten()
     }
@@ -151,7 +172,7 @@ impl World {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct EntityId(u64);
 
 pub struct EntityHandle<'w> {
@@ -188,6 +209,7 @@ impl EntityHandle<'_> {
 // }
 
 // todo benchmark
+// vecs should be sorted by entityid
 struct DenseStorage<T: Any> {
     entities: Vec<EntityId>,
     data: Vec<T>,
@@ -221,7 +243,50 @@ impl<T: Any> DenseStorage<T> {
             .zip(self.data.iter())
             .map(|(&e, c)| (e, c))
     }
+
+    fn iter_mut(&mut self) -> impl Iterator<Item = (EntityId, &mut T)> {
+        self.entities
+            .iter()
+            .zip(self.data.iter_mut())
+            .map(|(&e, c)| (e, c))
+    }
 }
+
+// trait SystemParam<'w> {
+//     fn fetch(world: &'w mut World) -> Self;
+// }
+
+// struct Res<'w, T: Any>(&'w T);
+
+// impl<'w, T: Any> SystemParam<'w> for Res<'w, T> {
+//     fn fetch(world: &'w mut World) -> Self {
+//         Self(world.get_resource().unwrap())
+//     }
+// }
+
+// struct ResMut<'w, T: Any>(&'w mut T);
+
+// impl<'w, T: Any> SystemParam<'w> for ResMut<'w, T> {
+//     fn fetch(world: &'w mut World) -> Self {
+//         Self(world.get_resource_mut().unwrap())
+//     }
+// }
+
+// pub trait System<'w, T>: 'static {
+//     fn run(&self, world: &'w mut World);
+// }
+
+// impl<'w, F: Fn() + 'static> System<'w, ()> for F {
+//     fn run(&self, _: &mut World) {
+//         self();
+//     }
+// }
+
+// impl<'w, S1: SystemParam<'w>, F: Fn(S1) + 'static> System<'w, (S1,)> for F {
+//     fn run(&self, world: &'w mut World) {
+//         self(S1::fetch(world));
+//     }
+// }
 
 pub trait System: 'static {
     fn run(&self, world: &mut World);
@@ -229,7 +294,7 @@ pub trait System: 'static {
 
 impl<F: Fn(&mut World) + 'static> System for F {
     fn run(&self, world: &mut World) {
-        (self)(world);
+        self(world);
     }
 }
 

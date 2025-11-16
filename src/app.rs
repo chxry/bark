@@ -74,7 +74,7 @@ impl Default for Time {
         Self {
             last_instant: Instant::now(),
             accumulator: Duration::ZERO,
-            timestep: Duration::from_secs_f32(1.0 / 60.0),
+            timestep: Duration::from_secs_f32(1.0 / 2.0),
         }
     }
 }
