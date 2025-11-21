@@ -2,19 +2,10 @@ use crate::app;
 use crate::ecs::World;
 use winit::window::Window;
 
+pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
+pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
 pub fn init(world: &mut World) {
-    world.queue_system(init_renderer);
-    world.insert_system_with(app::resized, handle_resize);
-    world.insert_system_with(app::render, render);
-}
-
-struct Renderer<'a> {
-    surface: wgpu::Surface<'a>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-}
-
-fn init_renderer(world: &mut World) {
     let window = world.get_resource::<Window>().unwrap();
 
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
@@ -30,14 +21,34 @@ fn init_renderer(world: &mut World) {
         force_fallback_adapter: false,
     }))
     .unwrap();
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: None,
+        required_features: wgpu::Features::TEXTURE_BINDING_ARRAY | wgpu::Features::PUSH_CONSTANTS,
+        required_limits: wgpu::Limits {
+            max_binding_array_elements_per_shader_stage: 2048,
+            max_push_constant_size: 256,
+            ..Default::default()
+        },
+        experimental_features: wgpu::ExperimentalFeatures::disabled(),
+        memory_hints: wgpu::MemoryHints::Performance,
+        trace: wgpu::Trace::Off,
+    }))
+    .unwrap();
 
     world.insert_resource(Renderer {
         surface,
         device,
         queue,
     });
+
+    world.insert_system_with(app::render, render);
+    world.add_event_handler(resize_configure_surface);
+}
+
+pub struct Renderer {
+    pub surface: wgpu::Surface<'static>,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
 }
 
 pub struct RenderFrame {
@@ -62,7 +73,7 @@ fn render(world: &mut World) {
         encoder,
     });
 
-    world.queue_system_once(submit_frame);
+    world.queue_system(submit_frame);
 }
 
 pub fn submit_frame(world: &mut World) {
@@ -72,16 +83,15 @@ pub fn submit_frame(world: &mut World) {
     frame.surface.present();
 }
 
-fn handle_resize(world: &mut World) {
-    let app::ResizeEvent(size) = world.get_resource().unwrap();
+fn resize_configure_surface(world: &mut World, event: &app::ResizeEvent) {
     let renderer = world.get_resource::<Renderer>().unwrap();
     renderer.surface.configure(
         &renderer.device,
         &wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: wgpu::TextureFormat::Bgra8UnormSrgb,
-            width: size.width,
-            height: size.height,
+            format: FORMAT,
+            width: event.0.width,
+            height: event.0.height,
             present_mode: wgpu::PresentMode::AutoVsync,
             desired_maximum_frame_latency: 2,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,

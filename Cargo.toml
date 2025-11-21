@@ -9,3 +9,6 @@ tracing-subscriber = { version ="0.3", features = ["env-filter"] }
 winit = "0.30"
 wgpu = "27.0"
 pollster = "0.2"
+glam = "0.30"
+obj-rs = "0.7"
+image = "0.25"

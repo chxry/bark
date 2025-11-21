@@ -1,20 +1,21 @@
 use crate::{TypeIdNamed, init};
 use std::any::{self, Any};
-use std::cell::UnsafeCell;
+use std::cell::{Ref, RefCell, RefMut, UnsafeCell};
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use tracing::{debug, error, trace};
+
+// todo check the unsafecells
 
 #[derive(Default)]
 pub struct World {
     entity_id: u64,
     components: HashMap<TypeIdNamed, Box<UnsafeCell<dyn Any>>>,
-    resources: HashMap<TypeIdNamed, Box<dyn Any>>,
+    resources: HashMap<TypeIdNamed, Box<UnsafeCell<dyn Any>>>,
     systems: HashMap<TypeIdNamed, SystemInfo>,
     systems_queue: VecDeque<TypeIdNamed>,
+    event_handlers: HashMap<TypeIdNamed, Box<dyn Any>>,
 }
-
-type Storage<T> = DenseStorage<T>;
 
 impl World {
     pub fn spawn(&mut self) -> EntityHandle<'_> {
@@ -31,9 +32,9 @@ impl World {
         let storage = self
             .components
             .entry(type_id)
-            .or_insert_with(|| Box::new(UnsafeCell::new(Storage::<T>::new())))
+            .or_insert_with(|| Box::new(UnsafeCell::new(DenseStorage::<T>::new())))
             .get_mut();
-        let storage = storage.downcast_mut::<Storage<_>>().unwrap();
+        let storage = storage.downcast_mut::<DenseStorage<_>>().unwrap();
         storage.insert(entity_id, data);
     }
 
@@ -42,7 +43,7 @@ impl World {
             .get(&TypeIdNamed::of::<T>())
             .map(|s| {
                 unsafe { s.as_ref_unchecked() }
-                    .downcast_ref::<Storage<T>>()
+                    .downcast_ref::<DenseStorage<T>>()
                     .unwrap()
                     .iter()
             })
@@ -54,9 +55,8 @@ impl World {
         self.components
             .get(&TypeIdNamed::of::<T>())
             .map(|s| {
-                // todo
                 unsafe { s.as_mut_unchecked() }
-                    .downcast_mut::<Storage<T>>()
+                    .downcast_mut::<DenseStorage<T>>()
                     .unwrap()
                     .iter_mut()
             })
@@ -65,26 +65,29 @@ impl World {
     }
 
     pub fn insert_resource<T: Any>(&mut self, data: T) {
-        self.resources
-            .insert(TypeIdNamed::of::<T>(), Box::new(data));
+        let id = TypeIdNamed::of::<T>();
+        trace!("insert resource {:?}", id);
+        self.resources.insert(id, Box::new(UnsafeCell::new(data)));
     }
 
     pub fn get_resource<T: Any>(&self) -> Option<&T> {
         self.resources
             .get(&TypeIdNamed::of::<T>())
-            .map(|r| r.downcast_ref().unwrap())
+            .map(|r| unsafe { r.as_ref_unchecked() }.downcast_ref().unwrap())
     }
 
-    pub fn get_resource_mut<T: Any>(&mut self) -> Option<&mut T> {
+    pub fn get_resource_mut<T: Any>(&self) -> Option<&mut T> {
         self.resources
-            .get_mut(&TypeIdNamed::of::<T>())
-            .map(|r| r.downcast_mut().unwrap())
+            .get(&TypeIdNamed::of::<T>())
+            .map(|r| unsafe { r.as_mut_unchecked() }.downcast_mut().unwrap())
     }
 
     pub fn remove_resource<T: Any>(&mut self) -> Option<T> {
-        self.resources
-            .remove(&TypeIdNamed::of::<T>())
-            .map(|r| *r.downcast().unwrap())
+        self.resources.remove(&TypeIdNamed::of::<T>()).map(|r| {
+            *unsafe { Box::from_raw(Box::into_raw(r).as_mut().unwrap().get()) }
+                .downcast()
+                .unwrap()
+        })
     }
 
     fn insert_system<S: System>(&mut self, sys: S) -> &mut SystemInfo {
@@ -123,7 +126,7 @@ impl World {
         match visited.get(&id) {
             Some(true) => return,
             Some(false) => {
-                error!("system cycle on {:?}", id.name);
+                error!("system cycle on {:?}", id);
                 return;
             }
             None => {
@@ -132,7 +135,7 @@ impl World {
         }
 
         let Some(info) = self.systems.get(&id).cloned() else {
-            error!("unknown system {:?}", id.name);
+            error!("unknown system {:?}", id);
             return;
         };
 
@@ -152,11 +155,11 @@ impl World {
         while let Some(id) = self.systems_queue.pop_front() {
             match self.systems.get(&id).cloned() {
                 Some(info) => {
-                    trace!("run system {:?}", id.name);
-                    info.sys.run(self);
+                    trace!("run system {:?}", id);
+                    (info.sys)(self);
                 }
                 None => {
-                    error!("unknown system {:?}", id.name);
+                    error!("unknown system {:?}", id);
                 }
             }
         }
@@ -169,6 +172,32 @@ impl World {
 
     pub fn run(mut self) {
         self.queue_and_run(init);
+    }
+
+    pub fn add_event_handler<F: EventHandler<T>, T: Any>(&mut self, handler: F) {
+        let id = TypeIdNamed::of::<T>();
+        let handlers = self.event_handlers.entry(id).or_insert_with(|| {
+            debug!("new event type {:?}", id);
+            Box::<EventHandlerStorage<T>>::new(vec![])
+        });
+        handlers
+            .downcast_mut::<EventHandlerStorage<T>>()
+            .unwrap()
+            .push(Rc::new(handler));
+    }
+
+    pub fn handle_event<T: Any>(&mut self, event: T) {
+        let id = TypeIdNamed::of::<T>();
+        trace!("handle event {:?}", id);
+        if let Some(handlers) = self.event_handlers.get(&id) {
+            let handlers = handlers
+                .downcast_ref::<EventHandlerStorage<T>>()
+                .unwrap()
+                .clone();
+            for h in handlers {
+                h(self, &event);
+            }
+        }
     }
 }
 
@@ -252,51 +281,11 @@ impl<T: Any> DenseStorage<T> {
     }
 }
 
-// trait SystemParam<'w> {
-//     fn fetch(world: &'w mut World) -> Self;
-// }
+pub trait System = Fn(&mut World) + 'static;
 
-// struct Res<'w, T: Any>(&'w T);
+pub trait EventHandler<T: Any> = Fn(&mut World, &T) + 'static;
 
-// impl<'w, T: Any> SystemParam<'w> for Res<'w, T> {
-//     fn fetch(world: &'w mut World) -> Self {
-//         Self(world.get_resource().unwrap())
-//     }
-// }
-
-// struct ResMut<'w, T: Any>(&'w mut T);
-
-// impl<'w, T: Any> SystemParam<'w> for ResMut<'w, T> {
-//     fn fetch(world: &'w mut World) -> Self {
-//         Self(world.get_resource_mut().unwrap())
-//     }
-// }
-
-// pub trait System<'w, T>: 'static {
-//     fn run(&self, world: &'w mut World);
-// }
-
-// impl<'w, F: Fn() + 'static> System<'w, ()> for F {
-//     fn run(&self, _: &mut World) {
-//         self();
-//     }
-// }
-
-// impl<'w, S1: SystemParam<'w>, F: Fn(S1) + 'static> System<'w, (S1,)> for F {
-//     fn run(&self, world: &'w mut World) {
-//         self(S1::fetch(world));
-//     }
-// }
-
-pub trait System: 'static {
-    fn run(&self, world: &mut World);
-}
-
-impl<F: Fn(&mut World) + 'static> System for F {
-    fn run(&self, world: &mut World) {
-        self(world);
-    }
-}
+type EventHandlerStorage<T> = Vec<Rc<dyn EventHandler<T>>>;
 
 #[derive(Clone)]
 struct SystemInfo {

@@ -1,14 +1,16 @@
-#![feature(unsafe_cell_access)]
+#![feature(unsafe_cell_access, trait_alias)]
 pub mod app;
+pub mod assets;
+pub mod bark3d;
 pub mod ecs;
 pub mod gfx;
 
 use crate::ecs::World;
 use std::any::{self, Any, TypeId};
 use std::cmp::Ordering;
-use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::iter::Peekable;
+use std::{fmt, mem, slice};
 
 pub fn init(_: &mut World) {}
 
@@ -67,7 +69,7 @@ impl<K: Eq + Ord, T, U, A: Iterator<Item = (K, T)>, B: Iterator<Item = (K, U)>> 
 
     fn next(&mut self) -> Option<Self::Item> {
         while let (Some((ka, _)), Some((kb, _))) = (self.a.peek(), self.b.peek()) {
-            match ka.cmp(&kb) {
+            match ka.cmp(kb) {
                 Ordering::Less => {
                     self.a.next();
                 }
@@ -83,4 +85,13 @@ impl<K: Eq + Ord, T, U, A: Iterator<Item = (K, T)>, B: Iterator<Item = (K, U)>> 
         }
         None
     }
+}
+
+pub fn cast_bytes_slice<T>(t: &[T]) -> &[u8] {
+    // safety: u8 is always valid
+    unsafe { slice::from_raw_parts(t.as_ptr() as _, mem::size_of_val(t)) }
+}
+
+pub fn cast_bytes<T>(t: &T) -> &[u8] {
+    cast_bytes_slice(slice::from_ref(t))
 }

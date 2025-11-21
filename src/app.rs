@@ -16,8 +16,6 @@ pub fn render(_: &mut World) {}
 
 pub struct ResizeEvent(pub PhysicalSize<u32>);
 
-pub fn resized(_: &mut World) {}
-
 impl ApplicationHandler for World {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window = event_loop
@@ -36,8 +34,7 @@ impl ApplicationHandler for World {
                 self.queue_and_run(render);
             }
             WindowEvent::Resized(size) => {
-                self.insert_resource(ResizeEvent(size));
-                self.queue_system_once(resized);
+                self.handle_event(ResizeEvent(size));
             }
             _ => {}
         }
