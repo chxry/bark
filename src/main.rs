@@ -46,7 +46,7 @@ fn setup(world: &mut World) {
         .insert(MeshRenderer {
             mesh: plant_pot_mesh,
             diffuse: plant_pot_diffuse,
-            normal: plant_pot_normal,
+            normal: Some(plant_pot_normal),
         })
         .insert(Spin);
     world
@@ -59,7 +59,7 @@ fn setup(world: &mut World) {
         .insert(MeshRenderer {
             mesh: plant_leaves_mesh,
             diffuse: plant_leaves_diffuse,
-            normal: plant_leaves_normal.clone(),
+            normal: Some(plant_leaves_normal),
         })
         .insert(Spin);
     world
@@ -72,7 +72,7 @@ fn setup(world: &mut World) {
         .insert(MeshRenderer {
             mesh: garfield_mesh,
             diffuse: garfield_diffuse,
-            normal: plant_leaves_normal,
+            normal: None,
         });
 }
 

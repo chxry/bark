@@ -35,7 +35,7 @@ struct GPUObject {
 pub struct MeshRenderer {
     pub mesh: Handle<Mesh>,
     pub diffuse: Handle<DynamicImage>,
-    pub normal: Handle<DynamicImage>,
+    pub normal: Option<Handle<DynamicImage>>,
 }
 
 struct RenderPipeline {
@@ -138,6 +138,7 @@ fn main_pass(world: &mut World) {
         cast_bytes(&GPUFrameGlobals { camera, camera_pos }),
     );
 
+    // todo this is all wacky
     let objects =
         intersect(world.get::<Transform>(), world.get::<MeshRenderer>()).collect::<Vec<_>>();
 
@@ -146,7 +147,11 @@ fn main_pass(world: &mut World) {
         &renderer.queue,
         objects
             .iter()
-            .flat_map(|o| [o.1.1.diffuse.clone(), o.1.1.normal.clone()])
+            .flat_map(|o| {
+                [Some(o.1.1.diffuse.clone()), o.1.1.normal.clone()]
+                    .into_iter()
+                    .flatten()
+            })
             .collect(),
     );
 
@@ -207,7 +212,11 @@ fn main_pass(world: &mut World) {
                     ),
                     normal_transform: Mat3A::from_quat(transform.rotation),
                     diffuse_id: pipeline.texture_manager.get_slot(&mesh.diffuse),
-                    normal_id: pipeline.texture_manager.get_slot(&mesh.normal),
+                    normal_id: mesh
+                        .normal
+                        .as_ref()
+                        .map(|h| pipeline.texture_manager.get_slot(h))
+                        .unwrap_or(NO_TEXTURE_ID),
                 }),
             );
             let mesh_handle = pipeline.mesh_manager.get_handle(&mesh.mesh);
@@ -305,6 +314,7 @@ struct GPUFrameGlobals {
 }
 
 const MAX_BOUND_TEXTURES: TextureSlotIndex = 2048;
+const NO_TEXTURE_ID: TextureSlotIndex = MAX_BOUND_TEXTURES + 1;
 
 struct TextureManager {
     undefined_texture_view: wgpu::TextureView,

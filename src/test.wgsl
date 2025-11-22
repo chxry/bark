@@ -14,8 +14,8 @@ struct FrameGlobals {
 struct Object {
   transform: mat4x4<f32>,
   normal_transform: mat3x3<f32>,
-  diffuse_id: u32,
-  normal_id: u32
+  diffuse_id: i32,
+  normal_id: i32
 }
 
 @group(0) @binding(0)
@@ -46,18 +46,24 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-  let diffuse_tex = textureSample(textures[obj.diffuse_id], tex_sampler, in.uv);
-  let normal_tex = textureSample(textures[obj.normal_id], tex_sampler, in.uv).xyz;
+  let diffuse_colour = textureSample(textures[obj.diffuse_id], tex_sampler, in.uv);
 
-  if diffuse_tex.a < 0.01 {
+  if diffuse_colour.a < 0.01 {
     discard;
   }
 
-  let n = normalize(in.normal);
-  let t = normalize(in.tangent.xyz);
-  let b = normalize(cross(n, t) * in.tangent.w);
-  let tbn = mat3x3(t, b, n);
-  let normal = normalize(tbn * (normal_tex * 2.0 - vec3(1.0)));
+  var normal: vec3<f32>;
+  if obj.normal_id > 0 {
+    let normal_ts = textureSample(textures[obj.normal_id], tex_sampler, in.uv).xyz;
+
+    let n = normalize(in.normal);
+    let t = normalize(in.tangent.xyz);
+    let b = normalize(cross(n, t) * in.tangent.w);
+    let tbn = mat3x3(t, b, n);
+    normal = normalize(tbn * (normal_ts * 2.0 - vec3(1.0)));
+  } else {
+    normal = in.normal;
+  }
 
   let light_dir = normalize(vec3(-1.0, 0.5, 0.0));
   let cam_dir = frame.camera_pos - in.world_pos;
@@ -66,7 +72,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
   let specular = pow(max(dot(normal, half), 0.0), 30.0);
   let light = 0.05 + diffuse + specular;
 
-  return vec4(diffuse_tex.rgb * light, 1.0);
+  return vec4(diffuse_colour.rgb * light, 1.0);
   // return vec4(0.5 * (normal + vec3(1.0)), 1.0);
 }
  
