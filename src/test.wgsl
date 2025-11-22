@@ -53,7 +53,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
   }
 
   var normal: vec3<f32>;
-  if obj.normal_id > 0 {
+  if obj.normal_id < 2048 {
     let normal_ts = textureSample(textures[obj.normal_id], tex_sampler, in.uv).xyz;
 
     let n = normalize(in.normal);

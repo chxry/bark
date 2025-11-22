@@ -125,13 +125,13 @@ fn main_pass(world: &mut World) {
     let pipeline = world.get_resource_mut::<RenderPipeline>().unwrap();
     let framebuffer = world.get_resource::<Framebuffer>().unwrap();
 
-    let camera_pos = Vec3::new(0.0, 7.0, 10.0);
+    let camera_pos = Vec3::new(0.0, 6.0, 10.0);
     let camera = Mat4::perspective_rh(
-        1.2,
+        1.0,
         frame.surface.texture.width() as f32 / frame.surface.texture.height() as f32,
         0.01,
         100.0,
-    ) * Mat4::look_at_rh(camera_pos, Vec3::new(0.0, 1.0, 0.0), Vec3::Y);
+    ) * Mat4::look_at_rh(camera_pos, Vec3::new(0.0, 2.5, 0.0), Vec3::Y);
     renderer.queue.write_buffer(
         &pipeline.frame_globals.buffer,
         0,
@@ -216,7 +216,7 @@ fn main_pass(world: &mut World) {
                         .normal
                         .as_ref()
                         .map(|h| pipeline.texture_manager.get_slot(h))
-                        .unwrap_or(NO_TEXTURE_ID),
+                        .unwrap_or(MAX_BOUND_TEXTURES),
                 }),
             );
             let mesh_handle = pipeline.mesh_manager.get_handle(&mesh.mesh);
@@ -314,7 +314,6 @@ struct GPUFrameGlobals {
 }
 
 const MAX_BOUND_TEXTURES: TextureSlotIndex = 2048;
-const NO_TEXTURE_ID: TextureSlotIndex = MAX_BOUND_TEXTURES + 1;
 
 struct TextureManager {
     undefined_texture_view: wgpu::TextureView,
