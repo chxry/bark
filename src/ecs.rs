@@ -1,4 +1,4 @@
-use crate::{TypeIdNamed, init};
+use crate::TypeIdNamed;
 use std::any::{self, Any};
 use std::cell::{Ref, RefCell, RefMut, UnsafeCell};
 use std::collections::{HashMap, VecDeque};
@@ -9,7 +9,7 @@ use tracing::{debug, error, trace};
 
 #[derive(Default)]
 pub struct World {
-    entity_id: u64,
+    entity_id: EntityId,
     components: HashMap<TypeIdNamed, Box<UnsafeCell<dyn Any>>>,
     resources: HashMap<TypeIdNamed, Box<UnsafeCell<dyn Any>>>,
     systems: HashMap<TypeIdNamed, SystemInfo>,
@@ -19,10 +19,10 @@ pub struct World {
 
 impl World {
     pub fn spawn(&mut self) -> EntityHandle<'_> {
-        self.entity_id += 1;
-        debug!("spawn entity {}", self.entity_id);
+        self.entity_id.0 += 1;
+        debug!("spawn entity {:?}", self.entity_id);
         EntityHandle {
-            id: EntityId(self.entity_id),
+            id: self.entity_id,
             world: self,
         }
     }
@@ -170,10 +170,6 @@ impl World {
         self.run_queued();
     }
 
-    pub fn run(mut self) {
-        self.queue_and_run(init);
-    }
-
     pub fn add_event_handler<F: EventHandler<T>, T: Any>(&mut self, handler: F) {
         let id = TypeIdNamed::of::<T>();
         let handlers = self.event_handlers.entry(id).or_insert_with(|| {
@@ -201,11 +197,11 @@ impl World {
     }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
 pub struct EntityId(u64);
 
 pub struct EntityHandle<'w> {
-    id: EntityId,
+    pub id: EntityId,
     world: &'w mut World,
 }
 

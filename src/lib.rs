@@ -5,14 +5,11 @@ pub mod bark3d;
 pub mod ecs;
 pub mod gfx;
 
-use crate::ecs::World;
 use std::any::{self, Any, TypeId};
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::iter::Peekable;
 use std::{fmt, mem, slice};
-
-pub fn init(_: &mut World) {}
 
 #[derive(Eq, Copy, Clone)]
 pub struct TypeIdNamed {

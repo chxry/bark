@@ -27,6 +27,7 @@ pub fn init(world: &mut World) {
         required_limits: wgpu::Limits {
             max_binding_array_elements_per_shader_stage: 2048,
             max_push_constant_size: 256,
+            max_buffer_size: 4 * 1024 * 1024 * 1024,
             ..Default::default()
         },
         experimental_features: wgpu::ExperimentalFeatures::disabled(),

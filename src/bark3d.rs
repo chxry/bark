@@ -2,7 +2,7 @@ use crate::app::ResizeEvent;
 use crate::assets::{self, AssetId, Assets, Handle};
 use crate::ecs::World;
 use crate::{app, cast_bytes, cast_bytes_slice, gfx, intersect};
-use glam::{Mat4, Vec2, Vec3};
+use glam::{Mat3A, Mat4, Quat, Vec2, Vec3, Vec4};
 use image::DynamicImage;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufReader, Read};
@@ -11,23 +11,31 @@ use std::num::NonZero;
 use tracing::{debug, error, trace};
 use wgpu::util::DeviceExt;
 
-pub fn start(_: &mut World) {}
-
-pub fn init(world: &mut World) {
-    world.queue_system(app::init);
-    world.queue_system(gfx::init);
-    world.queue_system(assets::init);
-    world.queue_system(init_pipeline);
-    world.queue_system(start);
+pub fn bark3d(world: &mut World) {
+    world.insert_system_before(gfx::init, app::init);
+    world.insert_system_before(init, gfx::init);
+    world.insert_system_before(init, assets::init);
+    world.queue_system(init);
 }
 
 pub struct Transform {
-    pub mat: Mat4,
+    pub position: Vec3,
+    pub rotation: Quat,
+    pub scale: Vec3,
+}
+
+#[repr(C)]
+struct GPUObject {
+    transform: Mat4,
+    normal_transform: Mat3A,
+    diffuse_id: u32,
+    normal_id: u32,
 }
 
 pub struct MeshRenderer {
     pub mesh: Handle<Mesh>,
-    pub texture: Handle<DynamicImage>,
+    pub diffuse: Handle<DynamicImage>,
+    pub normal: Handle<DynamicImage>,
 }
 
 struct RenderPipeline {
@@ -37,7 +45,7 @@ struct RenderPipeline {
     pipeline: wgpu::RenderPipeline,
 }
 
-fn init_pipeline(world: &mut World) {
+pub fn init(world: &mut World) {
     let assets = world.get_resource_mut::<Assets>().unwrap();
     assets.register_loader(load_mesh);
     assets.register_loader(load_image);
@@ -73,7 +81,7 @@ fn init_pipeline(world: &mut World) {
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: (mem::size_of::<Vertex>()) as _,
                     step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2],
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x3, 3 => Float32x4],
                 }],
             },
             fragment: Some(wgpu::FragmentState {
@@ -117,15 +125,18 @@ fn main_pass(world: &mut World) {
     let pipeline = world.get_resource_mut::<RenderPipeline>().unwrap();
     let framebuffer = world.get_resource::<Framebuffer>().unwrap();
 
+    let camera_pos = Vec3::new(0.0, 7.0, 10.0);
     let camera = Mat4::perspective_rh(
         1.2,
         frame.surface.texture.width() as f32 / frame.surface.texture.height() as f32,
         0.01,
         100.0,
-    ) * Mat4::look_at_rh(Vec3::new(5.0, 2.0, 5.0), Vec3::new(0.0, 2.0, 0.0), Vec3::Y);
-    renderer
-        .queue
-        .write_buffer(&pipeline.frame_globals.buffer, 0, cast_bytes(&camera));
+    ) * Mat4::look_at_rh(camera_pos, Vec3::new(0.0, 1.0, 0.0), Vec3::Y);
+    renderer.queue.write_buffer(
+        &pipeline.frame_globals.buffer,
+        0,
+        cast_bytes(&GPUFrameGlobals { camera, camera_pos }),
+    );
 
     let objects =
         intersect(world.get::<Transform>(), world.get::<MeshRenderer>()).collect::<Vec<_>>();
@@ -133,7 +144,10 @@ fn main_pass(world: &mut World) {
     pipeline.texture_manager.process_handles(
         &renderer.device,
         &renderer.queue,
-        objects.iter().map(|o| o.1.1.texture.clone()).collect(),
+        objects
+            .iter()
+            .flat_map(|o| [o.1.1.diffuse.clone(), o.1.1.normal.clone()])
+            .collect(),
     );
 
     pipeline.mesh_manager.process_handles(
@@ -151,7 +165,12 @@ fn main_pass(world: &mut World) {
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.5,
+                        g: 0.6,
+                        b: 0.8,
+                        a: 1.0,
+                    }),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -174,20 +193,27 @@ fn main_pass(world: &mut World) {
         main_pass.set_vertex_buffer(0, pipeline.mesh_manager.vertex_buffer.slice(..));
         main_pass.set_index_buffer(
             pipeline.mesh_manager.index_buffer.slice(..),
-            wgpu::IndexFormat::Uint16,
+            wgpu::IndexFormat::Uint32,
         );
         for (_, (transform, mesh)) in objects {
             main_pass.set_push_constants(
                 wgpu::ShaderStages::VERTEX_FRAGMENT,
                 0,
                 cast_bytes(&GPUObject {
-                    transform: transform.mat,
-                    texture_id: pipeline.texture_manager.get_slot(&mesh.texture),
+                    transform: Mat4::from_scale_rotation_translation(
+                        transform.scale,
+                        transform.rotation,
+                        transform.position,
+                    ),
+                    normal_transform: Mat3A::from_quat(transform.rotation),
+                    diffuse_id: pipeline.texture_manager.get_slot(&mesh.diffuse),
+                    normal_id: pipeline.texture_manager.get_slot(&mesh.normal),
                 }),
             );
             let mesh_handle = pipeline.mesh_manager.get_handle(&mesh.mesh);
             main_pass.draw_indexed(
-                mesh_handle.index_start as _..mesh.mesh.indices.len() as _,
+                mesh_handle.index_start as _
+                    ..mesh_handle.index_start as u32 + mesh.mesh.indices.len() as u32,
                 mesh_handle.vertex_start as _,
                 0..1,
             );
@@ -239,7 +265,7 @@ impl FrameGlobals {
     fn new(device: &wgpu::Device) -> Self {
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: mem::size_of::<Mat4>() as _,
+            size: mem::size_of::<GPUFrameGlobals>() as _,
             mapped_at_creation: false,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -247,7 +273,7 @@ impl FrameGlobals {
             label: None,
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -270,6 +296,12 @@ impl FrameGlobals {
             bind_group,
         }
     }
+}
+
+#[repr(C)]
+struct GPUFrameGlobals {
+    camera: Mat4,
+    camera_pos: Vec3,
 }
 
 const MAX_BOUND_TEXTURES: TextureSlotIndex = 2048;
@@ -391,7 +423,7 @@ impl TextureManager {
                         mip_level_count: 1,
                         sample_count: 1,
                         dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                        format: wgpu::TextureFormat::Rgba8Unorm, // todo
                         usage: wgpu::TextureUsages::TEXTURE_BINDING,
                         view_formats: &[],
                     },
@@ -511,9 +543,8 @@ impl MeshManager {
             let mut vertex_resize = 0;
             let mut index_resize = 0;
             for m in to_upload.values() {
-                vertex_resize +=
-                    (m.vertices.len() * mem::size_of::<Vertex>()) as wgpu::BufferAddress;
-                index_resize += (m.indices.len() * mem::size_of::<u16>()) as wgpu::BufferAddress;
+                vertex_resize += m.vertices.len() as wgpu::BufferAddress;
+                index_resize += m.indices.len() as wgpu::BufferAddress;
             }
 
             let mut vertex_view = grow_buffer(
@@ -521,16 +552,16 @@ impl MeshManager {
                 queue,
                 encoder,
                 &mut self.vertex_buffer,
-                self.vertex_end,
-                vertex_resize,
+                self.vertex_end * mem::size_of::<Vertex>() as wgpu::BufferAddress,
+                vertex_resize * mem::size_of::<Vertex>() as wgpu::BufferAddress,
             );
             let mut index_view = grow_buffer(
                 device,
                 queue,
                 encoder,
                 &mut self.index_buffer,
-                self.index_end,
-                index_resize,
+                self.index_end * mem::size_of::<u32>() as wgpu::BufferAddress,
+                index_resize * mem::size_of::<u32>() as wgpu::BufferAddress,
             );
 
             for (id, m) in to_upload {
@@ -540,13 +571,14 @@ impl MeshManager {
                     vertex_start: self.vertex_end,
                     index_start: self.index_end,
                 };
-                self.vertex_end +=
-                    (m.vertices.len() * mem::size_of::<Vertex>()) as wgpu::BufferAddress;
-                self.index_end += (m.indices.len() * mem::size_of::<u16>()) as wgpu::BufferAddress;
+                self.vertex_end += m.vertices.len() as wgpu::BufferAddress;
+                self.index_end += m.indices.len() as wgpu::BufferAddress;
 
-                vertex_view[handle.vertex_start as _..self.vertex_end as _]
+                vertex_view[handle.vertex_start as usize * mem::size_of::<Vertex>()
+                    ..self.vertex_end as usize * mem::size_of::<Vertex>()]
                     .copy_from_slice(cast_bytes_slice(&m.vertices));
-                index_view[handle.index_start as _..self.index_end as _]
+                index_view[handle.index_start as usize * mem::size_of::<u32>()
+                    ..self.index_end as usize * mem::size_of::<u32>()]
                     .copy_from_slice(cast_bytes_slice(&m.indices));
 
                 self.handles.insert(id, handle);
@@ -600,36 +632,91 @@ fn grow_buffer(
         .unwrap()
 }
 
-#[repr(C, align(16))]
-struct GPUObject {
-    transform: Mat4,
-    texture_id: u32,
-}
-
 pub struct Mesh {
     vertices: Vec<Vertex>,
-    indices: Vec<u16>,
+    indices: Vec<u32>,
 }
 
-#[repr(C, align(16))]
+#[repr(C)]
 struct Vertex {
     pos: Vec3,
     uv: Vec2,
+    normal: Vec3,
+    tangent: Vec4,
 }
 
 fn load_mesh(reader: impl Read) -> Mesh {
     let obj = obj::load_obj(BufReader::new(reader)).unwrap();
-    Mesh {
+    let mut mesh = Mesh {
         vertices: obj
             .vertices
             .into_iter()
             .map(|v: obj::TexturedVertex| Vertex {
                 pos: Vec3::from(v.position),
                 uv: Vec2::new(v.texture[0], 1.0 - v.texture[1]),
+                normal: Vec3::from(v.normal),
+                tangent: Vec4::ZERO,
             })
             .collect(),
         indices: obj.indices,
+    };
+
+    let mut tangents = vec![Vec3::ZERO; mesh.vertices.len()];
+    let mut bitangents = vec![Vec3::ZERO; mesh.vertices.len()];
+
+    for tri in mesh.indices.chunks_exact(3) {
+        let i0 = tri[0] as usize;
+        let i1 = tri[1] as usize;
+        let i2 = tri[2] as usize;
+
+        let v0 = &mesh.vertices[i0];
+        let v1 = &mesh.vertices[i1];
+        let v2 = &mesh.vertices[i2];
+
+        let p0 = v0.pos;
+        let p1 = v1.pos;
+        let p2 = v2.pos;
+
+        let uv0 = v0.uv;
+        let uv1 = v1.uv;
+        let uv2 = v2.uv;
+
+        let dp1 = p1 - p0;
+        let dp2 = p2 - p0;
+
+        let duv1 = uv1 - uv0;
+        let duv2 = uv2 - uv0;
+
+        let r = 1.0 / (duv1.x * duv2.y - duv1.y * duv2.x);
+
+        let tangent = (dp1 * duv2.y - dp2 * duv1.y) * r;
+        let bitangent = (dp2 * duv1.x - dp1 * duv2.x) * r;
+
+        tangents[i0] += tangent;
+        tangents[i1] += tangent;
+        tangents[i2] += tangent;
+
+        bitangents[i0] += bitangent;
+        bitangents[i1] += bitangent;
+        bitangents[i2] += bitangent;
     }
+
+    for (i, v) in mesh.vertices.iter_mut().enumerate() {
+        let n = v.normal;
+        let t = tangents[i];
+
+        let tangent = (t - n * n.dot(t)).normalize();
+
+        let b = bitangents[i];
+        let handedness = if n.cross(tangent).dot(b) < 0.0 {
+            -1.0
+        } else {
+            1.0
+        };
+
+        v.tangent = tangent.extend(handedness);
+    }
+    mesh
 }
 
 fn load_image(mut reader: impl Read) -> DynamicImage {
