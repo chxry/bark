@@ -73,7 +73,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
   let light = 0.05 + diffuse + specular;
 
   // return vec4(diffuse_colour.rgb * light, 1.0);
-  return vec4(pow(diffuse_colour.rgb,vec3(2.2)) * light, 1.0);
+  return vec4(pow(diffuse_colour.rgb, vec3(2.2)) * light, 1.0); // TEMP
   // return vec4(0.5 * (normal + vec3(1.0)), 1.0);
 }
  

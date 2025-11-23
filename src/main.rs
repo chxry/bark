@@ -1,9 +1,8 @@
 use bark::assets::Assets;
-use bark::bark3d::{self, Mesh, MeshRenderer, Transform};
+use bark::bark3d::{self, RenderObject, Transform};
 use bark::ecs::World;
 use bark::{app, intersect};
 use glam::{Quat, Vec3};
-use image::DynamicImage;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -30,8 +29,7 @@ fn setup(world: &mut World) {
 
     let plant_leaves_mesh = assets.load("assets/potted_plant_02_leaves.obj");
     let plant_leaves_diffuse = assets.load("assets/potted_plant_02_leaves_diff_4k.png");
-    let plant_leaves_normal =
-        assets.load::<DynamicImage>("assets/potted_plant_02_leaves_nor_gl_4k.png");
+    let plant_leaves_normal = assets.load("assets/potted_plant_02_leaves_nor_gl_4k.png");
 
     let garfield_mesh = assets.load("assets/garfield.obj");
     let garfield_diffuse = assets.load("assets/garfield.png");
@@ -43,7 +41,7 @@ fn setup(world: &mut World) {
             rotation: Quat::IDENTITY,
             scale: Vec3::splat(5.0),
         })
-        .insert(MeshRenderer {
+        .insert(RenderObject {
             mesh: plant_pot_mesh,
             diffuse: plant_pot_diffuse,
             normal: Some(plant_pot_normal),
@@ -56,7 +54,7 @@ fn setup(world: &mut World) {
             rotation: Quat::IDENTITY,
             scale: Vec3::splat(5.0),
         })
-        .insert(MeshRenderer {
+        .insert(RenderObject {
             mesh: plant_leaves_mesh,
             diffuse: plant_leaves_diffuse,
             normal: Some(plant_leaves_normal),
@@ -69,7 +67,7 @@ fn setup(world: &mut World) {
             rotation: Quat::from_rotation_y(-0.5),
             scale: Vec3::ONE,
         })
-        .insert(MeshRenderer {
+        .insert(RenderObject {
             mesh: garfield_mesh,
             diffuse: garfield_diffuse,
             normal: None,

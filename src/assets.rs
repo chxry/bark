@@ -4,7 +4,6 @@ use std::any::{self, Any};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
-use std::ops::Deref;
 use std::sync::{Arc, OnceLock, Weak};
 use std::{fmt, thread};
 use tracing::{debug, trace};
