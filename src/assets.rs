@@ -1,23 +1,32 @@
 use crate::TypeIdNamed;
 use crate::ecs::World;
+use crate::job::ThreadPool;
 use std::any::{self, Any};
 use std::collections::HashMap;
+use std::fmt;
 use std::fs::File;
+use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::sync::{Arc, OnceLock, Weak};
-use std::{fmt, thread};
 use tracing::{debug, trace};
 
 pub fn init(world: &mut World) {
-    world.insert_resource(Assets::default());
+    world.insert_resource(Assets::new());
 }
 
-#[derive(Default)]
 pub struct Assets {
+    thread_pool: ThreadPool,
     types: HashMap<TypeIdNamed, Box<dyn Any>>,
 }
 
 impl Assets {
+    pub fn new() -> Self {
+        Self {
+            thread_pool: ThreadPool::new(),
+            types: HashMap::new(),
+        }
+    }
+
     pub fn register_loader<F: AssetLoader<T>, T>(&mut self, loader: F) {
         let id = TypeIdNamed::of::<T>();
         debug!("new asset loader {:?} for {:?}", any::type_name::<F>(), id);
@@ -29,22 +38,26 @@ impl Assets {
         match self.types.get_mut(&id) {
             Some(ty) => {
                 let ty = ty.downcast_mut::<AssetType<T>>().unwrap();
-                let data = match ty.storage.get(path).and_then(|h| h.upgrade()) {
-                    Some(h) => h,
+                match ty.storage.get(path).and_then(|h| h.upgrade()) {
+                    Some(h) => Handle(h),
                     None => {
-                        let handle = Arc::new(OnceLock::new());
-                        load_thread(path.to_string(), ty.loader.clone(), handle.clone());
-                        // thread::spawn(move || {
-                        //     trace!("load {:?} as {:?}", path, id);
-                        //     // let asset = (ty.loader)(Box::new(File::open(path).unwrap()));
-                        // });
-                        ty.storage.insert(path.to_string(), Arc::downgrade(&handle));
+                        let handle = Handle(Arc::new(HandleData {
+                            id: path.to_string(),
+                            data: OnceLock::new(),
+                        }));
+
+                        let loader = ty.loader.clone();
+                        let handle2 = handle.clone();
+                        self.thread_pool.execute(move || {
+                            trace!("loading {:?} as {:?}", handle2.id(), any::type_name::<T>());
+                            let asset = (loader)(Box::new(File::open(handle2.id()).unwrap()));
+                            let _ = handle2.0.data.set(asset);
+                        });
+
+                        ty.storage
+                            .insert(handle.id().clone(), Arc::downgrade(&handle.0));
                         handle
                     }
-                };
-                Handle {
-                    id: AssetId(path.to_string()),
-                    data,
                 }
             }
             None => {
@@ -54,62 +67,61 @@ impl Assets {
     }
 }
 
-fn load_thread<T: Any + Send + Sync>(
-    path: String,
-    loader: Arc<dyn AssetLoader<T>>,
-    handle: Arc<OnceLock<T>>,
-) {
-    thread::spawn(move || {
-        trace!("loading {:?} as {:?}", path, any::type_name::<T>());
-        let asset = loader(Box::new(File::open(path).unwrap()));
-        let _ = handle.set(asset);
-    });
-}
-
 pub trait AssetLoader<T: Any> = Fn(Box<dyn Read>) -> T + Send + Sync + 'static;
 
-pub struct Handle<T> {
-    id: AssetId,
-    data: Arc<OnceLock<T>>,
-}
+pub struct Handle<T>(Arc<HandleData<T>>);
 
 impl<T> Handle<T> {
     pub fn loaded(&self) -> bool {
-        self.data.get().is_some()
+        self.0.data.get().is_some()
     }
     pub fn try_get(&self) -> Option<&T> {
-        self.data.get()
+        self.0.data.get()
     }
 
     pub fn get(&self) -> &T {
         self.try_get().unwrap()
     }
 
-    pub fn id(&self) -> AssetId {
-        self.id.clone()
+    pub fn id(&self) -> &AssetId {
+        &self.0.id
     }
 }
 
-// impl<T> Deref for Handle<T> {
-//     type Target = T;
+impl<T> PartialEq for Handle<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.id == other.0.id
+    }
+}
 
-//     fn deref(&self) -> &T {
-//         self.data.get().unwrap()
-//     }
-// }
+impl<T> Eq for Handle<T> {}
+
+impl<T> Hash for Handle<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.id.hash(state)
+    }
+}
 
 impl<T> Clone for Handle<T> {
     fn clone(&self) -> Self {
-        Handle {
-            id: self.id.clone(),
-            data: self.data.clone(),
-        }
+        Handle(self.0.clone())
     }
+}
+
+impl<T> fmt::Debug for Handle<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.id.fmt(f)
+    }
+}
+
+struct HandleData<T> {
+    id: AssetId,
+    data: OnceLock<T>,
 }
 
 struct AssetType<T: Any> {
     loader: Arc<dyn AssetLoader<T>>,
-    storage: HashMap<String, Weak<OnceLock<T>>>,
+    storage: HashMap<AssetId, Weak<HandleData<T>>>,
 }
 
 impl<T: Any> AssetType<T> {
@@ -121,17 +133,4 @@ impl<T: Any> AssetType<T> {
     }
 }
 
-#[derive(Clone, Hash, PartialEq, Eq)]
-pub struct AssetId(String);
-
-// impl AssetId {
-//     pub fn of<T>(handle: &Handle<T>) -> Self {
-//         handle.id.clone()
-//     }
-// }
-
-impl fmt::Debug for AssetId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
+type AssetId = String;

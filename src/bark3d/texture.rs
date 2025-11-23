@@ -1,6 +1,7 @@
-use crate::assets::{AssetId, Handle};
+use crate::assets::Handle;
 use image::DynamicImage;
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::num::NonZero;
 use tracing::{debug, error};
 use wgpu::util::DeviceExt;
@@ -9,13 +10,29 @@ type TextureSlotIndex = u32;
 
 pub const MAX_BOUND_TEXTURES: TextureSlotIndex = 2048;
 
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct TextureSource {
+    asset: Handle<DynamicImage>,
+    srgb: bool,
+}
+
+impl TextureSource {
+    pub fn new(asset: Handle<DynamicImage>, srgb: bool) -> Self {
+        Self { asset, srgb }
+    }
+
+    pub fn ready(&self) -> bool {
+        self.asset.loaded()
+    }
+}
+
 pub struct TextureManager {
     pub undefined_texture_view: wgpu::TextureView,
     pub layout: wgpu::BindGroupLayout,
     pub sampler: wgpu::Sampler,
     pub bind_group: wgpu::BindGroup,
     pub slots: [Option<TextureSlot>; MAX_BOUND_TEXTURES as _],
-    pub handle_map: HashMap<AssetId, TextureSlotIndex>,
+    pub source_map: HashMap<TextureSource, TextureSlotIndex>,
 }
 
 impl TextureManager {
@@ -75,17 +92,17 @@ impl TextureManager {
             sampler,
             bind_group,
             slots,
-            handle_map: HashMap::new(),
+            source_map: HashMap::new(),
         }
     }
 
-    pub fn process_handles(
+    pub fn process_sources(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        handles: Vec<Handle<DynamicImage>>,
+        sources: HashSet<TextureSource>,
     ) {
-        if handles.len() > MAX_BOUND_TEXTURES as _ {
+        if sources.len() > MAX_BOUND_TEXTURES as _ {
             error!(
                 "amount of bound textures exceeds limit ({})",
                 MAX_BOUND_TEXTURES
@@ -94,54 +111,53 @@ impl TextureManager {
         }
         let mut bindings_changed = false;
 
-        let active_ids = handles.iter().map(|h| h.id()).collect::<HashSet<_>>();
         for s in &mut self.slots {
-            if let Some(slot) = s {
-                let id = slot.image.id();
-                if !active_ids.contains(&id) {
-                    debug!("free texture {:?}", id);
-                    *s = None;
-                    bindings_changed = true;
-                }
+            if let Some(slot) = s
+                && !sources.contains(&slot.source)
+            {
+                *s = None;
+                bindings_changed = true;
             }
         }
 
         let mut i = 0;
-        for h in handles {
-            if let Some(mesh) = h.try_get() {
-                let id = h.id();
-                if !self.handle_map.contains_key(&id) {
-                    debug!("uploading texture {:?}", id);
-                    while self.slots[i].is_some() {
-                        i += 1;
-                    }
-                    let texture = device.create_texture_with_data(
-                        queue,
-                        &wgpu::TextureDescriptor {
-                            label: None,
-                            size: wgpu::Extent3d {
-                                width: mesh.width(),
-                                height: mesh.height(),
-                                depth_or_array_layers: 1,
-                            },
-                            mip_level_count: 1,
-                            sample_count: 1,
-                            dimension: wgpu::TextureDimension::D2,
-                            format: wgpu::TextureFormat::Rgba8Unorm, // todo
-                            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                            view_formats: &[],
-                        },
-                        wgpu::util::TextureDataOrder::default(),
-                        &mesh.to_rgba8(),
-                    );
-                    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                    self.slots[i] = Some(TextureSlot {
-                        image: h.clone(),
-                        view,
-                    });
-                    self.handle_map.insert(id, i as _);
-                    bindings_changed = true;
+        for source in sources {
+            if !self.source_map.contains_key(&source) {
+                debug!("upload texture {:?}", source.asset);
+                let image = source.asset.get();
+                while self.slots[i].is_some() {
+                    i += 1;
                 }
+                let texture = device.create_texture_with_data(
+                    queue,
+                    &wgpu::TextureDescriptor {
+                        label: None,
+                        size: wgpu::Extent3d {
+                            width: image.width(),
+                            height: image.height(),
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: if source.srgb {
+                            wgpu::TextureFormat::Rgba8UnormSrgb
+                        } else {
+                            wgpu::TextureFormat::Rgba8Unorm
+                        },
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                        view_formats: &[],
+                    },
+                    wgpu::util::TextureDataOrder::default(),
+                    &image.to_rgba8(),
+                );
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                self.slots[i] = Some(TextureSlot {
+                    source: source.clone(),
+                    view,
+                });
+                self.source_map.insert(source, i as _);
+                bindings_changed = true;
             }
         }
 
@@ -156,8 +172,8 @@ impl TextureManager {
         }
     }
 
-    pub fn get_slot(&self, handle: &Handle<DynamicImage>) -> TextureSlotIndex {
-        *self.handle_map.get(&handle.id()).unwrap()
+    pub fn get_slot(&self, source: &TextureSource) -> Option<TextureSlotIndex> {
+        self.source_map.get(source).copied()
     }
 
     fn build_bind_group(
@@ -189,6 +205,12 @@ impl TextureManager {
 }
 
 pub struct TextureSlot {
-    pub image: Handle<DynamicImage>,
+    pub source: TextureSource,
     pub view: wgpu::TextureView,
+}
+
+pub fn load_image(mut reader: impl Read) -> DynamicImage {
+    let mut buf = vec![];
+    reader.read_to_end(&mut buf).unwrap();
+    image::load_from_memory(&buf).unwrap()
 }

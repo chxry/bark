@@ -1,4 +1,6 @@
 use bark::assets::Assets;
+use bark::bark3d::mesh::MeshSource;
+use bark::bark3d::texture::TextureSource;
 use bark::bark3d::{self, RenderObject, Transform};
 use bark::ecs::World;
 use bark::{app, intersect};
@@ -42,9 +44,9 @@ fn setup(world: &mut World) {
             scale: Vec3::splat(5.0),
         })
         .insert(RenderObject {
-            mesh: plant_pot_mesh,
-            diffuse: plant_pot_diffuse,
-            normal: Some(plant_pot_normal),
+            mesh: MeshSource::new(plant_pot_mesh),
+            diffuse: TextureSource::new(plant_pot_diffuse, true),
+            normal: Some(TextureSource::new(plant_pot_normal, false)),
         })
         .insert(Spin);
     world
@@ -55,9 +57,10 @@ fn setup(world: &mut World) {
             scale: Vec3::splat(5.0),
         })
         .insert(RenderObject {
-            mesh: plant_leaves_mesh,
-            diffuse: plant_leaves_diffuse,
-            normal: Some(plant_leaves_normal),
+            mesh: MeshSource::new(plant_leaves_mesh),
+            diffuse: TextureSource::new(plant_leaves_diffuse, true),
+
+            normal: Some(TextureSource::new(plant_leaves_normal, false)),
         })
         .insert(Spin);
     world
@@ -68,8 +71,8 @@ fn setup(world: &mut World) {
             scale: Vec3::ONE,
         })
         .insert(RenderObject {
-            mesh: garfield_mesh,
-            diffuse: garfield_diffuse,
+            mesh: MeshSource::new(garfield_mesh),
+            diffuse: TextureSource::new(garfield_diffuse, true),
             normal: None,
         });
 }

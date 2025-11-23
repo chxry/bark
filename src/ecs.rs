@@ -1,4 +1,4 @@
-use crate::TypeIdNamed;
+use crate::{TypeIdNamed, catch_panic};
 use std::any::{self, Any};
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, VecDeque};
@@ -156,7 +156,7 @@ impl World {
             match self.systems.get(&id).cloned() {
                 Some(info) => {
                     trace!("run system {:?}", id);
-                    (info.sys)(self);
+                    catch_panic(|| (info.sys)(self), id.name);
                 }
                 None => {
                     error!("unknown system {:?}", id);
@@ -191,7 +191,7 @@ impl World {
                 .unwrap()
                 .clone();
             for h in handlers {
-                h(self, &event);
+                catch_panic(|| h(self, &event), id.name);
             }
         }
     }

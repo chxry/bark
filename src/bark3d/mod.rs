@@ -1,15 +1,14 @@
 pub mod mesh;
 pub mod texture;
 
-use self::mesh::{Mesh, MeshManager, Vertex};
-use self::texture::{MAX_BOUND_TEXTURES, TextureManager};
+use self::mesh::{MeshManager, MeshSource, Vertex, load_mesh};
+use self::texture::{MAX_BOUND_TEXTURES, TextureManager, TextureSource, load_image};
 use crate::app::ResizeEvent;
-use crate::assets::{self, Assets, Handle};
+use crate::assets::{self, Assets};
 use crate::ecs::World;
 use crate::{app, cast_bytes, gfx, intersect};
-use glam::{Mat3A, Mat4, Quat, Vec2, Vec3, Vec4};
-use image::DynamicImage;
-use std::io::{BufReader, Read};
+use glam::{Mat3A, Mat4, Quat, Vec3};
+use std::collections::HashSet;
 use std::mem;
 
 pub fn bark3d(world: &mut World) {
@@ -19,10 +18,17 @@ pub fn bark3d(world: &mut World) {
     world.queue_system(init);
 }
 
+#[derive(Copy, Clone, PartialEq)]
 pub struct Transform {
     pub position: Vec3,
     pub rotation: Quat,
     pub scale: Vec3,
+}
+
+pub struct RenderObject {
+    pub mesh: MeshSource,
+    pub diffuse: TextureSource,
+    pub normal: Option<TextureSource>,
 }
 
 #[repr(C)]
@@ -31,12 +37,6 @@ struct GPUObject {
     normal_transform: Mat3A,
     diffuse_id: u32,
     normal_id: u32,
-}
-
-pub struct RenderObject {
-    pub mesh: Handle<Mesh>,
-    pub diffuse: Handle<DynamicImage>,
-    pub normal: Option<Handle<DynamicImage>>,
 }
 
 struct RenderPipeline {
@@ -139,28 +139,33 @@ fn main_pass(world: &mut World) {
         cast_bytes(&GPUFrameGlobals { camera, camera_pos }),
     );
 
-    // todo this is all wacky + there is a race condition here, if textures load after process_handles
-    let objects =
-        intersect(world.get::<Transform>(), world.get::<RenderObject>()).collect::<Vec<_>>();
+    let mut scene = intersect(world.get::<Transform>(), world.get::<RenderObject>())
+        .map(|(_, (t, o))| (true, t, o))
+        .collect::<Vec<_>>();
 
-    pipeline.texture_manager.process_handles(
-        &renderer.device,
-        &renderer.queue,
-        objects
-            .iter()
-            .flat_map(|o| {
-                [Some(o.1.1.diffuse.clone()), o.1.1.normal.clone()]
-                    .into_iter()
-                    .flatten()
-            })
-            .collect(),
-    );
+    let mut scene_textures = HashSet::new();
+    let mut scene_meshes = HashSet::new();
+    for (render, _, object) in &mut scene {
+        if !object.mesh.ready() || !object.diffuse.ready() {
+            *render = false;
+            continue;
+        }
+        scene_textures.insert(object.diffuse.clone());
+        if let Some(normal) = object.normal.clone().filter(|s| s.ready()) {
+            scene_textures.insert(normal);
+        }
+        scene_meshes.insert(object.mesh.clone());
+    }
 
-    pipeline.mesh_manager.process_handles(
+    pipeline
+        .texture_manager
+        .process_sources(&renderer.device, &renderer.queue, scene_textures);
+
+    pipeline.mesh_manager.process_sources(
         &renderer.device,
         &renderer.queue,
         &mut frame.encoder,
-        objects.iter().map(|o| o.1.1.mesh.clone()).collect(),
+        scene_meshes,
     );
 
     let mut main_pass = frame
@@ -201,8 +206,8 @@ fn main_pass(world: &mut World) {
             pipeline.mesh_manager.index_buffer.slice(..),
             wgpu::IndexFormat::Uint32,
         );
-        for (_, (transform, mesh_renderer)) in objects {
-            if !mesh_renderer.mesh.loaded() || !mesh_renderer.diffuse.loaded() {
+        for (render, transform, object) in scene {
+            if !render {
                 continue;
             }
 
@@ -216,19 +221,18 @@ fn main_pass(world: &mut World) {
                         transform.position,
                     ),
                     normal_transform: Mat3A::from_quat(transform.rotation),
-                    diffuse_id: pipeline.texture_manager.get_slot(&mesh_renderer.diffuse),
-                    normal_id: mesh_renderer
+                    diffuse_id: pipeline.texture_manager.get_slot(&object.diffuse).unwrap(),
+                    normal_id: object
                         .normal
                         .as_ref()
-                        .filter(|h| h.loaded())
-                        .map(|h| pipeline.texture_manager.get_slot(h))
+                        .and_then(|h| pipeline.texture_manager.get_slot(h))
                         .unwrap_or(MAX_BOUND_TEXTURES),
                 }),
             );
-            let mesh_handle = pipeline.mesh_manager.get_handle(&mesh_renderer.mesh);
+            let mesh_handle = pipeline.mesh_manager.get_handle(&object.mesh).unwrap();
             main_pass.draw_indexed(
                 mesh_handle.index_start as _
-                    ..mesh_handle.index_start as u32 + mesh_handle.mesh.get().indices.len() as u32,
+                    ..mesh_handle.index_start as u32 + mesh_handle.index_count,
                 mesh_handle.vertex_start as _,
                 0..1,
             );
@@ -317,84 +321,4 @@ impl FrameGlobals {
 struct GPUFrameGlobals {
     camera: Mat4,
     camera_pos: Vec3,
-}
-
-fn load_mesh(reader: impl Read) -> Mesh {
-    let obj = obj::load_obj(BufReader::new(reader)).unwrap();
-    let mut mesh = Mesh {
-        vertices: obj
-            .vertices
-            .into_iter()
-            .map(|v: obj::TexturedVertex| Vertex {
-                pos: Vec3::from(v.position),
-                uv: Vec2::new(v.texture[0], 1.0 - v.texture[1]),
-                normal: Vec3::from(v.normal),
-                tangent: Vec4::ZERO,
-            })
-            .collect(),
-        indices: obj.indices,
-    };
-
-    let mut tangents = vec![Vec3::ZERO; mesh.vertices.len()];
-    let mut bitangents = vec![Vec3::ZERO; mesh.vertices.len()];
-
-    for tri in mesh.indices.chunks_exact(3) {
-        let i0 = tri[0] as usize;
-        let i1 = tri[1] as usize;
-        let i2 = tri[2] as usize;
-
-        let v0 = &mesh.vertices[i0];
-        let v1 = &mesh.vertices[i1];
-        let v2 = &mesh.vertices[i2];
-
-        let p0 = v0.pos;
-        let p1 = v1.pos;
-        let p2 = v2.pos;
-
-        let uv0 = v0.uv;
-        let uv1 = v1.uv;
-        let uv2 = v2.uv;
-
-        let dp1 = p1 - p0;
-        let dp2 = p2 - p0;
-
-        let duv1 = uv1 - uv0;
-        let duv2 = uv2 - uv0;
-
-        let r = 1.0 / (duv1.x * duv2.y - duv1.y * duv2.x);
-
-        let tangent = (dp1 * duv2.y - dp2 * duv1.y) * r;
-        let bitangent = (dp2 * duv1.x - dp1 * duv2.x) * r;
-
-        tangents[i0] += tangent;
-        tangents[i1] += tangent;
-        tangents[i2] += tangent;
-
-        bitangents[i0] += bitangent;
-        bitangents[i1] += bitangent;
-        bitangents[i2] += bitangent;
-    }
-
-    for (i, v) in mesh.vertices.iter_mut().enumerate() {
-        let n = v.normal;
-        let t = tangents[i];
-
-        let tangent = (t - n * n.dot(t)).normalize();
-
-        let b = bitangents[i];
-        let handedness = if n.cross(tangent).dot(b) < 0.0 {
-            -1.0
-        } else {
-            1.0
-        };
-
-        v.tangent = tangent.extend(handedness);
-    }
-    mesh
-}
-
-fn load_image(mut reader: impl Read) -> DynamicImage {
-    let mut buf = vec![];
-    reader.read_to_end(&mut buf).unwrap();
-    image::load_from_memory(&buf).unwrap()
 }
