@@ -2,11 +2,11 @@ use crate::TypeIdNamed;
 use crate::ecs::World;
 use std::any::{self, Any};
 use std::collections::HashMap;
-use std::fmt;
 use std::fs::File;
 use std::io::Read;
 use std::ops::Deref;
-use std::rc::{Rc, Weak};
+use std::sync::{Arc, OnceLock, Weak};
+use std::{fmt, thread};
 use tracing::{debug, trace};
 
 pub fn init(world: &mut World) {
@@ -25,7 +25,7 @@ impl Assets {
         self.types.insert(id, Box::new(AssetType::new(loader)));
     }
 
-    pub fn load<T: Any>(&mut self, path: &str) -> Handle<T> {
+    pub fn load<T: Any + Send + Sync>(&mut self, path: &str) -> Handle<T> {
         let id = TypeIdNamed::of::<T>();
         match self.types.get_mut(&id) {
             Some(ty) => {
@@ -33,15 +33,19 @@ impl Assets {
                 let data = match ty.storage.get(path).and_then(|h| h.upgrade()) {
                     Some(h) => h,
                     None => {
-                        trace!("load {:?} as {:?}", path, id);
-                        let asset = Rc::new((ty.loader)(Box::new(File::open(path).unwrap())));
-                        ty.storage.insert(path.to_string(), Rc::downgrade(&asset));
-                        asset
+                        let handle = Arc::new(OnceLock::new());
+                        load_thread(path.to_string(), ty.loader.clone(), handle.clone());
+                        // thread::spawn(move || {
+                        //     trace!("load {:?} as {:?}", path, id);
+                        //     // let asset = (ty.loader)(Box::new(File::open(path).unwrap()));
+                        // });
+                        ty.storage.insert(path.to_string(), Arc::downgrade(&handle));
+                        handle
                     }
                 };
                 Handle {
-                    data,
                     id: AssetId(path.to_string()),
+                    data,
                 }
             }
             None => {
@@ -51,20 +55,49 @@ impl Assets {
     }
 }
 
-pub trait AssetLoader<T: Any> = Fn(Box<dyn Read>) -> T + 'static;
+fn load_thread<T: Any + Send + Sync>(
+    path: String,
+    loader: Arc<dyn AssetLoader<T>>,
+    handle: Arc<OnceLock<T>>,
+) {
+    thread::spawn(move || {
+        trace!("loading {:?} as {:?}", path, any::type_name::<T>());
+        let asset = loader(Box::new(File::open(path).unwrap()));
+        let _ = handle.set(asset);
+    });
+}
+
+pub trait AssetLoader<T: Any> = Fn(Box<dyn Read>) -> T + Send + Sync + 'static;
 
 pub struct Handle<T> {
     id: AssetId,
-    data: Rc<T>,
+    data: Arc<OnceLock<T>>,
 }
 
-impl<T> Deref for Handle<T> {
-    type Target = T;
+impl<T> Handle<T> {
+    pub fn loaded(&self) -> bool {
+        self.data.get().is_some()
+    }
+    pub fn try_get(&self) -> Option<&T> {
+        self.data.get()
+    }
 
-    fn deref(&self) -> &T {
-        &self.data
+    pub fn get(&self) -> &T {
+        self.try_get().unwrap()
+    }
+
+    pub fn id(&self) -> AssetId {
+        self.id.clone()
     }
 }
+
+// impl<T> Deref for Handle<T> {
+//     type Target = T;
+
+//     fn deref(&self) -> &T {
+//         self.data.get().unwrap()
+//     }
+// }
 
 impl<T> Clone for Handle<T> {
     fn clone(&self) -> Self {
@@ -76,14 +109,14 @@ impl<T> Clone for Handle<T> {
 }
 
 struct AssetType<T: Any> {
-    loader: Box<dyn AssetLoader<T>>,
-    storage: HashMap<String, Weak<T>>,
+    loader: Arc<dyn AssetLoader<T>>,
+    storage: HashMap<String, Weak<OnceLock<T>>>,
 }
 
 impl<T: Any> AssetType<T> {
     fn new<F: AssetLoader<T>>(loader: F) -> Self {
         Self {
-            loader: Box::new(loader),
+            loader: Arc::new(loader),
             storage: HashMap::new(),
         }
     }
@@ -92,11 +125,11 @@ impl<T: Any> AssetType<T> {
 #[derive(Clone, Hash, PartialEq, Eq)]
 pub struct AssetId(String);
 
-impl AssetId {
-    pub fn of<T>(handle: &Handle<T>) -> Self {
-        handle.id.clone()
-    }
-}
+// impl AssetId {
+//     pub fn of<T>(handle: &Handle<T>) -> Self {
+//         handle.id.clone()
+//     }
+// }
 
 impl fmt::Debug for AssetId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

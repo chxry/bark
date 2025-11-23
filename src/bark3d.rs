@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{BufReader, Read};
 use std::mem;
 use std::num::NonZero;
-use tracing::{debug, error, trace};
+use tracing::{debug, error};
 use wgpu::util::DeviceExt;
 
 pub fn bark3d(world: &mut World) {
@@ -138,7 +138,7 @@ fn main_pass(world: &mut World) {
         cast_bytes(&GPUFrameGlobals { camera, camera_pos }),
     );
 
-    // todo this is all wacky
+    // todo this is all wacky + there is a race condition here, if textures load after process_handles
     let objects =
         intersect(world.get::<Transform>(), world.get::<MeshRenderer>()).collect::<Vec<_>>();
 
@@ -191,7 +191,7 @@ fn main_pass(world: &mut World) {
             occlusion_query_set: None,
             label: None,
         });
-    if !objects.is_empty() {
+    if pipeline.mesh_manager.vertex_buffer.size() > 0 {
         main_pass.set_pipeline(&pipeline.pipeline);
         main_pass.set_bind_group(0, &pipeline.frame_globals.bind_group, &[]);
         main_pass.set_bind_group(1, &pipeline.texture_manager.bind_group, &[]);
@@ -200,7 +200,11 @@ fn main_pass(world: &mut World) {
             pipeline.mesh_manager.index_buffer.slice(..),
             wgpu::IndexFormat::Uint32,
         );
-        for (_, (transform, mesh)) in objects {
+        for (_, (transform, mesh_renderer)) in objects {
+            if !mesh_renderer.mesh.loaded() || !mesh_renderer.diffuse.loaded() {
+                continue;
+            }
+
             main_pass.set_push_constants(
                 wgpu::ShaderStages::VERTEX_FRAGMENT,
                 0,
@@ -211,18 +215,19 @@ fn main_pass(world: &mut World) {
                         transform.position,
                     ),
                     normal_transform: Mat3A::from_quat(transform.rotation),
-                    diffuse_id: pipeline.texture_manager.get_slot(&mesh.diffuse),
-                    normal_id: mesh
+                    diffuse_id: pipeline.texture_manager.get_slot(&mesh_renderer.diffuse),
+                    normal_id: mesh_renderer
                         .normal
                         .as_ref()
+                        .filter(|h| h.loaded())
                         .map(|h| pipeline.texture_manager.get_slot(h))
                         .unwrap_or(MAX_BOUND_TEXTURES),
                 }),
             );
-            let mesh_handle = pipeline.mesh_manager.get_handle(&mesh.mesh);
+            let mesh_handle = pipeline.mesh_manager.get_handle(&mesh_renderer.mesh);
             main_pass.draw_indexed(
                 mesh_handle.index_start as _
-                    ..mesh_handle.index_start as u32 + mesh.mesh.indices.len() as u32,
+                    ..mesh_handle.index_start as u32 + mesh_handle.mesh.get().indices.len() as u32,
                 mesh_handle.vertex_start as _,
                 0..1,
             );
@@ -400,12 +405,12 @@ impl TextureManager {
         }
         let mut bindings_changed = false;
 
-        let active_ids = handles.iter().map(AssetId::of).collect::<HashSet<_>>();
+        let active_ids = handles.iter().map(|h| h.id()).collect::<HashSet<_>>();
         for s in &mut self.slots {
             if let Some(slot) = s {
-                let id = AssetId::of(&slot.image);
+                let id = slot.image.id();
                 if !active_ids.contains(&id) {
-                    trace!("free texture {:?}", id);
+                    debug!("free texture {:?}", id);
                     *s = None;
                     bindings_changed = true;
                 }
@@ -414,38 +419,40 @@ impl TextureManager {
 
         let mut i = 0;
         for h in handles {
-            let id = AssetId::of(&h);
-            if !self.handle_map.contains_key(&id) {
-                trace!("uploading texture {:?}", id);
-                while self.slots[i].is_some() {
-                    i += 1;
-                }
-                let texture = device.create_texture_with_data(
-                    queue,
-                    &wgpu::TextureDescriptor {
-                        label: None,
-                        size: wgpu::Extent3d {
-                            width: h.width(),
-                            height: h.height(),
-                            depth_or_array_layers: 1,
+            if let Some(mesh) = h.try_get() {
+                let id = h.id();
+                if !self.handle_map.contains_key(&id) {
+                    debug!("uploading texture {:?}", id);
+                    while self.slots[i].is_some() {
+                        i += 1;
+                    }
+                    let texture = device.create_texture_with_data(
+                        queue,
+                        &wgpu::TextureDescriptor {
+                            label: None,
+                            size: wgpu::Extent3d {
+                                width: mesh.width(),
+                                height: mesh.height(),
+                                depth_or_array_layers: 1,
+                            },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: wgpu::TextureFormat::Rgba8Unorm, // todo
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                            view_formats: &[],
                         },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8Unorm, // todo
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                        view_formats: &[],
-                    },
-                    wgpu::util::TextureDataOrder::default(),
-                    &h.to_rgba8(),
-                );
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                self.slots[i] = Some(TextureSlot {
-                    image: h.clone(),
-                    view,
-                });
-                self.handle_map.insert(id, i as _);
-                bindings_changed = true;
+                        wgpu::util::TextureDataOrder::default(),
+                        &mesh.to_rgba8(),
+                    );
+                    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                    self.slots[i] = Some(TextureSlot {
+                        image: h.clone(),
+                        view,
+                    });
+                    self.handle_map.insert(id, i as _);
+                    bindings_changed = true;
+                }
             }
         }
 
@@ -461,7 +468,7 @@ impl TextureManager {
     }
 
     fn get_slot(&self, handle: &Handle<DynamicImage>) -> TextureSlotIndex {
-        *self.handle_map.get(&AssetId::of(handle)).unwrap()
+        *self.handle_map.get(&handle.id()).unwrap()
     }
 
     fn build_bind_group(
@@ -544,16 +551,17 @@ impl MeshManager {
         let to_upload = handles
             .iter()
             .filter_map(|h| {
-                let id = AssetId::of(h);
-                (!self.handles.contains_key(&AssetId::of(h))).then_some((id, h))
+                (!self.handles.contains_key(&h.id()) && h.loaded()).then_some((h.id(), h))
             })
             .collect::<HashMap<_, _>>();
+
         if !to_upload.is_empty() {
             let mut vertex_resize = 0;
             let mut index_resize = 0;
-            for m in to_upload.values() {
-                vertex_resize += m.vertices.len() as wgpu::BufferAddress;
-                index_resize += m.indices.len() as wgpu::BufferAddress;
+            for h in to_upload.values() {
+                let mesh = h.get();
+                vertex_resize += mesh.vertices.len() as wgpu::BufferAddress;
+                index_resize += mesh.indices.len() as wgpu::BufferAddress;
             }
 
             let mut vertex_view = grow_buffer(
@@ -573,22 +581,32 @@ impl MeshManager {
                 index_resize * mem::size_of::<u32>() as wgpu::BufferAddress,
             );
 
-            for (id, m) in to_upload {
-                trace!("uploading mesh {:?}", id);
+            let mut current_vertex_offset = 0;
+            let mut current_index_offset = 0;
+
+            for (id, h) in to_upload {
+                debug!("uploading mesh {:?}", id);
+                let mesh = h.get();
+
                 let handle = MeshHandle {
-                    mesh: m.clone(),
+                    mesh: h.clone(),
                     vertex_start: self.vertex_end,
                     index_start: self.index_end,
                 };
-                self.vertex_end += m.vertices.len() as wgpu::BufferAddress;
-                self.index_end += m.indices.len() as wgpu::BufferAddress;
 
-                vertex_view[handle.vertex_start as usize * mem::size_of::<Vertex>()
-                    ..self.vertex_end as usize * mem::size_of::<Vertex>()]
-                    .copy_from_slice(cast_bytes_slice(&m.vertices));
-                index_view[handle.index_start as usize * mem::size_of::<u32>()
-                    ..self.index_end as usize * mem::size_of::<u32>()]
-                    .copy_from_slice(cast_bytes_slice(&m.indices));
+                self.vertex_end += mesh.vertices.len() as wgpu::BufferAddress;
+                self.index_end += mesh.indices.len() as wgpu::BufferAddress;
+
+                let vertex_end =
+                    current_vertex_offset + mesh.vertices.len() * mem::size_of::<Vertex>();
+                vertex_view[current_vertex_offset..vertex_end]
+                    .copy_from_slice(cast_bytes_slice(&mesh.vertices));
+                current_vertex_offset = vertex_end;
+
+                let index_end = current_index_offset + mesh.indices.len() * mem::size_of::<u32>();
+                index_view[current_index_offset..index_end]
+                    .copy_from_slice(cast_bytes_slice(&mesh.indices));
+                current_index_offset = index_end;
 
                 self.handles.insert(id, handle);
             }
@@ -596,7 +614,7 @@ impl MeshManager {
     }
 
     fn get_handle(&self, handle: &Handle<Mesh>) -> &MeshHandle {
-        self.handles.get(&AssetId::of(handle)).unwrap()
+        self.handles.get(&handle.id()).unwrap()
     }
 }
 
@@ -632,12 +650,12 @@ fn grow_buffer(
     needed: wgpu::BufferAddress,
 ) -> wgpu::QueueWriteBufferView {
     if needed > buffer.size() - current_usage {
-        let new_buffer = resized_buffer(device, buffer, buffer.size() + needed);
-        encoder.copy_buffer_to_buffer(buffer, 0, &new_buffer, 0, buffer.size());
+        let new_buffer = resized_buffer(device, buffer, current_usage + needed);
+        encoder.copy_buffer_to_buffer(buffer, 0, &new_buffer, 0, current_usage);
         *buffer = new_buffer;
     }
     queue
-        .write_buffer_with(buffer, current_usage, NonZero::new(buffer.size()).unwrap())
+        .write_buffer_with(buffer, current_usage, NonZero::new(needed).unwrap())
         .unwrap()
 }
 
