@@ -2,7 +2,7 @@ pub mod mesh;
 pub mod texture;
 
 use self::mesh::{MeshManager, MeshSource, Vertex, load_mesh};
-use self::texture::{MAX_BOUND_TEXTURES, TextureManager, TextureSource, load_image};
+use self::texture::{TextureManager, TextureSource, load_image};
 use crate::app::ResizeEvent;
 use crate::assets::{self, Assets};
 use crate::ecs::World;
@@ -18,25 +18,40 @@ pub fn bark3d(world: &mut World) {
     world.queue_system(init);
 }
 
-#[derive(Copy, Clone, PartialEq)]
 pub struct Transform {
     pub position: Vec3,
     pub rotation: Quat,
     pub scale: Vec3,
 }
 
+// todo clean up the amount of stuff here
 pub struct RenderObject {
     pub mesh: MeshSource,
-    pub diffuse: TextureSource,
+    pub diffuse_colour: Vec3,
+    pub diffuse: Option<TextureSource>,
     pub normal: Option<TextureSource>,
+    pub pbr: PbrMode,
+}
+
+pub enum PbrMode {
+    Sampled(TextureSource),
+    Values { roughness: f32, metallic: f32 },
+}
+
+pub struct Camera {
+    pub fov: f32,
 }
 
 #[repr(C)]
 struct GPUObject {
     transform: Mat4,
     normal_transform: Mat3A,
+    diffuse_colour: Vec3,
+    pad: u32, // TODO
+    pbr_arm: Vec3,
     diffuse_id: u32,
     normal_id: u32,
+    pbr_id: u32,
 }
 
 struct RenderPipeline {
@@ -126,17 +141,23 @@ fn main_pass(world: &mut World) {
     let pipeline = world.get_resource_mut::<RenderPipeline>().unwrap();
     let framebuffer = world.get_resource::<Framebuffer>().unwrap();
 
-    let camera_pos = Vec3::new(0.0, 6.0, 10.0);
-    let camera = Mat4::perspective_rh(
-        1.0,
-        frame.surface.texture.width() as f32 / frame.surface.texture.height() as f32,
-        0.01,
-        100.0,
-    ) * Mat4::look_at_rh(camera_pos, Vec3::new(0.0, 2.5, 0.0), Vec3::Y);
+    let (_, (cam_transform, cam)) = intersect(world.get::<Transform>(), world.get::<Camera>())
+        .next()
+        .unwrap();
+
+    let aspect_ratio = frame.surface.texture.width() as f32 / frame.surface.texture.height() as f32;
     renderer.queue.write_buffer(
         &pipeline.frame_globals.buffer,
         0,
-        cast_bytes(&GPUFrameGlobals { camera, camera_pos }),
+        cast_bytes(&GPUFrameGlobals {
+            camera: Mat4::perspective_rh(cam.fov, aspect_ratio, 0.01, 100.0)
+                * Mat4::look_to_rh(
+                    cam_transform.position,
+                    cam_transform.rotation * Vec3::NEG_Z,
+                    Vec3::Y,
+                ),
+            camera_pos: cam_transform.position,
+        }),
     );
 
     let mut scene = intersect(world.get::<Transform>(), world.get::<RenderObject>())
@@ -146,15 +167,27 @@ fn main_pass(world: &mut World) {
     let mut scene_textures = HashSet::new();
     let mut scene_meshes = HashSet::new();
     for (render, _, object) in &mut scene {
-        if !object.mesh.ready() || !object.diffuse.ready() {
+        if object.mesh.ready() {
+            scene_meshes.insert(object.mesh.clone());
+        } else {
             *render = false;
-            continue;
         }
-        scene_textures.insert(object.diffuse.clone());
-        if let Some(normal) = object.normal.clone().filter(|s| s.ready()) {
-            scene_textures.insert(normal);
+
+        if let Some(diffuse) = &object.diffuse
+            && diffuse.ready()
+        {
+            scene_textures.insert(diffuse.clone());
         }
-        scene_meshes.insert(object.mesh.clone());
+        if let Some(normal) = &object.normal
+            && normal.ready()
+        {
+            scene_textures.insert(normal.clone());
+        }
+        if let PbrMode::Sampled(pbr) = &object.pbr
+            && pbr.ready()
+        {
+            scene_textures.insert(pbr.clone());
+        }
     }
 
     pipeline
@@ -211,6 +244,22 @@ fn main_pass(world: &mut World) {
                 continue;
             }
 
+            // let slot = |x: Option<&TextureSource>| {
+            //     x.and_then(|h| pipeline.texture_manager.get_slot(h))
+            //         .unwrap_or(0)
+            // };
+
+            let (pbr_id, pbr_arm) = match &object.pbr {
+                PbrMode::Sampled(tex) => (
+                    pipeline.texture_manager.get_slot(tex).unwrap_or(0),
+                    Vec3::ONE,
+                ),
+                PbrMode::Values {
+                    roughness,
+                    metallic,
+                } => (0, Vec3::new(1.0, *roughness, *metallic)),
+            };
+
             main_pass.set_push_constants(
                 wgpu::ShaderStages::VERTEX_FRAGMENT,
                 0,
@@ -220,13 +269,22 @@ fn main_pass(world: &mut World) {
                         transform.rotation,
                         transform.position,
                     ),
-                    normal_transform: Mat3A::from_quat(transform.rotation),
-                    diffuse_id: pipeline.texture_manager.get_slot(&object.diffuse).unwrap(),
+                    normal_transform: Mat3A::from_quat(transform.rotation), // todo i think this needs to be inverse transpose if non uniform scale
+                    diffuse_colour: object.diffuse_colour,
+                    pbr_arm,
+                    diffuse_id: object
+                        .diffuse
+                        .as_ref()
+                        .and_then(|x| pipeline.texture_manager.get_slot(x))
+                        .unwrap_or(0),
                     normal_id: object
                         .normal
                         .as_ref()
-                        .and_then(|h| pipeline.texture_manager.get_slot(h))
-                        .unwrap_or(MAX_BOUND_TEXTURES),
+                        .and_then(|x| pipeline.texture_manager.get_slot(x))
+                        .unwrap_or(0),
+
+                    pbr_id,
+                    pad: 0,
                 }),
             );
             let mesh_handle = pipeline.mesh_manager.get_handle(&object.mesh).unwrap();

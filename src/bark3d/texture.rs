@@ -10,6 +10,7 @@ type TextureSlotIndex = u32;
 
 pub const MAX_BOUND_TEXTURES: TextureSlotIndex = 2048;
 
+// todo unload assets from the cpu after uploaded
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct TextureSource {
     asset: Handle<DynamicImage>,
@@ -54,7 +55,7 @@ impl TextureManager {
                 view_formats: &[],
             },
             wgpu::util::TextureDataOrder::default(),
-            &[255, 0, 255, 255],
+            &[255; 4],
         );
         let undefined_texture_view =
             undefined_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -120,7 +121,7 @@ impl TextureManager {
             }
         }
 
-        let mut i = 0;
+        let mut i = 1;
         for source in sources {
             if !self.source_map.contains_key(&source) {
                 debug!("upload texture {:?}", source.asset);

@@ -1,4 +1,4 @@
-use crate::{TypeIdNamed, catch_panic};
+use crate::TypeIdNamed;
 use std::any::{self, Any};
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, VecDeque};
@@ -20,7 +20,7 @@ pub struct World {
 impl World {
     pub fn spawn(&mut self) -> EntityHandle<'_> {
         self.entity_id.0 += 1;
-        debug!("spawn entity {:?}", self.entity_id);
+        trace!("spawn entity {:?}", self.entity_id);
         EntityHandle {
             id: self.entity_id,
             world: self,
@@ -156,7 +156,7 @@ impl World {
             match self.systems.get(&id).cloned() {
                 Some(info) => {
                     trace!("run system {:?}", id);
-                    catch_panic(|| (info.sys)(self), id.name);
+                    (info.sys)(self);
                 }
                 None => {
                     error!("unknown system {:?}", id);
@@ -191,7 +191,7 @@ impl World {
                 .unwrap()
                 .clone();
             for h in handlers {
-                catch_panic(|| h(self, &event), id.name);
+                h(self, &event);
             }
         }
     }

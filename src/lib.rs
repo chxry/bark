@@ -10,8 +10,7 @@ use std::any::{self, Any, TypeId};
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::iter::Peekable;
-use std::{fmt, mem, panic, slice};
-use tracing::error;
+use std::{fmt, mem, slice};
 
 #[derive(Eq, Copy, Clone)]
 pub struct TypeIdNamed {
@@ -84,14 +83,6 @@ impl<K: Eq + Ord, T, U, A: Iterator<Item = (K, T)>, B: Iterator<Item = (K, U)>> 
         }
         None
     }
-}
-
-pub fn catch_panic<F: FnOnce()>(f: F, name: &'static str) {
-    panic::set_hook(Box::new(move |info| {
-        error!("{:?} panicked:\n{}", name, info);
-    }));
-    f();
-    let _ = panic::take_hook();
 }
 
 pub fn cast_bytes_slice<T>(t: &[T]) -> &[u8] {
