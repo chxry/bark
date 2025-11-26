@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 use crate::app;
 use crate::ecs::World;
 use winit::window::Window;
@@ -99,4 +101,39 @@ fn resize_configure_surface(world: &mut World, event: &app::ResizeEvent) {
             view_formats: vec![],
         },
     );
+}
+
+pub fn resized_buffer(
+    device: &wgpu::Device,
+    buffer: &wgpu::Buffer,
+    new_size: wgpu::BufferAddress,
+) -> wgpu::Buffer {
+    let new_size = wgpu::util::align_to(
+        (buffer.size() * 3 / 2).max(new_size),
+        wgpu::COPY_BUFFER_ALIGNMENT,
+    );
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: new_size,
+        mapped_at_creation: false,
+        usage: buffer.usage(),
+    })
+}
+
+pub fn grow_buffer(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    buffer: &mut wgpu::Buffer,
+    current_usage: wgpu::BufferAddress,
+    needed: wgpu::BufferAddress,
+) -> wgpu::QueueWriteBufferView {
+    if needed > buffer.size() - current_usage {
+        let new_buffer = resized_buffer(device, buffer, current_usage + needed);
+        encoder.copy_buffer_to_buffer(buffer, 0, &new_buffer, 0, current_usage);
+        *buffer = new_buffer;
+    }
+    queue
+        .write_buffer_with(buffer, current_usage, NonZero::new(needed).unwrap())
+        .unwrap()
 }

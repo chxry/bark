@@ -6,10 +6,13 @@ use self::texture::{TextureManager, TextureSource, load_image};
 use crate::app::ResizeEvent;
 use crate::assets::{self, Assets};
 use crate::ecs::World;
-use crate::{app, cast_bytes, gfx, intersect};
-use glam::{Mat3A, Mat4, Quat, Vec3};
+use crate::gfx::resized_buffer;
+use crate::{app, cast_bytes, cast_bytes_slice, gfx, intersect};
+use glam::{Affine3A, Mat3A, Mat4, Quat, Vec3};
 use std::collections::HashSet;
 use std::mem;
+
+pub const DEFAULT_BUFFER_SIZE: wgpu::BufferAddress = 1024 * 1024;
 
 pub fn bark3d(world: &mut World) {
     world.insert_system_before(gfx::init, app::init);
@@ -24,7 +27,6 @@ pub struct Transform {
     pub scale: Vec3,
 }
 
-// todo clean up the amount of stuff here
 pub struct RenderObject {
     pub mesh: MeshSource,
     pub diffuse_colour: Vec3,
@@ -42,23 +44,34 @@ pub struct Camera {
     pub fov: f32,
 }
 
+pub enum Light {
+    Directional(Vec3),
+}
+
 #[repr(C)]
 struct GPUObject {
     transform: Mat4,
     normal_transform: Mat3A,
     diffuse_colour: Vec3,
-    pad: u32, // TODO
-    pbr_arm: Vec3,
     diffuse_id: u32,
+    pbr_arm: Vec3,
     normal_id: u32,
     pbr_id: u32,
 }
 
+#[repr(C)]
+struct GPULight {
+    direction: Vec3,
+    tag: u32,
+}
+
 struct RenderPipeline {
-    frame_globals: FrameGlobals,
     texture_manager: TextureManager,
     mesh_manager: MeshManager,
     pipeline: wgpu::RenderPipeline,
+    uniform_buffer: wgpu::Buffer,
+    light_buffer: wgpu::Buffer,
+    scene_bind_group: wgpu::BindGroup,
 }
 
 pub fn init(world: &mut World) {
@@ -68,15 +81,72 @@ pub fn init(world: &mut World) {
 
     let renderer = world.get_resource_mut::<gfx::Renderer>().unwrap();
 
-    let frame_globals = FrameGlobals::new(&renderer.device);
     let texture_manager = TextureManager::new(&renderer.device, &renderer.queue);
     let mesh_manager = MeshManager::new(&renderer.device);
+
+    let uniform_buffer = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: mem::size_of::<GPUFrameGlobals>() as _,
+        mapped_at_creation: false,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+    });
+    let light_buffer = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: DEFAULT_BUFFER_SIZE,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    let scene_bind_group_layout =
+        renderer
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: None,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+    let scene_bind_group = renderer
+        .device
+        .create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &scene_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: light_buffer.as_entire_binding(),
+                },
+            ],
+        });
 
     let pipeline_layout = renderer
         .device
         .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[&frame_globals.layout, &texture_manager.layout],
+            bind_group_layouts: &[&scene_bind_group_layout, &texture_manager.layout],
             push_constant_ranges: &[wgpu::PushConstantRange {
                 stages: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 range: 0..mem::size_of::<GPUObject>() as _,
@@ -125,10 +195,12 @@ pub fn init(world: &mut World) {
         });
 
     world.insert_resource(RenderPipeline {
-        frame_globals,
         texture_manager,
         mesh_manager,
         pipeline,
+        uniform_buffer,
+        light_buffer,
+        scene_bind_group,
     });
 
     world.insert_system_before(gfx::submit_frame, main_pass);
@@ -147,7 +219,7 @@ fn main_pass(world: &mut World) {
 
     let aspect_ratio = frame.surface.texture.width() as f32 / frame.surface.texture.height() as f32;
     renderer.queue.write_buffer(
-        &pipeline.frame_globals.buffer,
+        &pipeline.uniform_buffer,
         0,
         cast_bytes(&GPUFrameGlobals {
             camera: Mat4::perspective_rh(cam.fov, aspect_ratio, 0.01, 100.0)
@@ -160,13 +232,13 @@ fn main_pass(world: &mut World) {
         }),
     );
 
-    let mut scene = intersect(world.get::<Transform>(), world.get::<RenderObject>())
+    let mut objects = intersect(world.get::<Transform>(), world.get::<RenderObject>())
         .map(|(_, (t, o))| (true, t, o))
         .collect::<Vec<_>>();
 
     let mut scene_textures = HashSet::new();
     let mut scene_meshes = HashSet::new();
-    for (render, _, object) in &mut scene {
+    for (render, _, object) in &mut objects {
         if object.mesh.ready() {
             scene_meshes.insert(object.mesh.clone());
         } else {
@@ -201,6 +273,28 @@ fn main_pass(world: &mut World) {
         scene_meshes,
     );
 
+    let lights = world
+        .get::<Light>()
+        .map(|(_, l)| match l {
+            Light::Directional(dir) => GPULight {
+                direction: dir.normalize(),
+                tag: 1,
+            },
+        })
+        .chain([GPULight {
+            direction: Vec3::ZERO,
+            tag: 0,
+        }])
+        .collect::<Vec<_>>();
+    let light_buf_size = (lights.len() * mem::size_of::<GPULight>()) as wgpu::BufferAddress;
+    if pipeline.light_buffer.size() < light_buf_size {
+        pipeline.light_buffer =
+            resized_buffer(&renderer.device, &pipeline.light_buffer, light_buf_size);
+    }
+    renderer
+        .queue
+        .write_buffer(&pipeline.light_buffer, 0, cast_bytes_slice(&lights));
+
     let mut main_pass = frame
         .encoder
         .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -232,22 +326,23 @@ fn main_pass(world: &mut World) {
         });
     if pipeline.mesh_manager.vertex_buffer.size() > 0 {
         main_pass.set_pipeline(&pipeline.pipeline);
-        main_pass.set_bind_group(0, &pipeline.frame_globals.bind_group, &[]);
+        main_pass.set_bind_group(0, &pipeline.scene_bind_group, &[]);
         main_pass.set_bind_group(1, &pipeline.texture_manager.bind_group, &[]);
         main_pass.set_vertex_buffer(0, pipeline.mesh_manager.vertex_buffer.slice(..));
         main_pass.set_index_buffer(
             pipeline.mesh_manager.index_buffer.slice(..),
             wgpu::IndexFormat::Uint32,
         );
-        for (render, transform, object) in scene {
+        for (render, transform, object) in objects {
             if !render {
                 continue;
             }
 
-            // let slot = |x: Option<&TextureSource>| {
-            //     x.and_then(|h| pipeline.texture_manager.get_slot(h))
-            //         .unwrap_or(0)
-            // };
+            let transform = Affine3A::from_scale_rotation_translation(
+                transform.scale,
+                transform.rotation,
+                transform.position,
+            );
 
             let (pbr_id, pbr_arm) = match &object.pbr {
                 PbrMode::Sampled(tex) => (
@@ -264,19 +359,15 @@ fn main_pass(world: &mut World) {
                 wgpu::ShaderStages::VERTEX_FRAGMENT,
                 0,
                 cast_bytes(&GPUObject {
-                    transform: Mat4::from_scale_rotation_translation(
-                        transform.scale,
-                        transform.rotation,
-                        transform.position,
-                    ),
-                    normal_transform: Mat3A::from_quat(transform.rotation), // todo i think this needs to be inverse transpose if non uniform scale
+                    transform: transform.into(),
+                    normal_transform: transform.matrix3.inverse().transpose(),
                     diffuse_colour: object.diffuse_colour,
-                    pbr_arm,
                     diffuse_id: object
                         .diffuse
                         .as_ref()
                         .and_then(|x| pipeline.texture_manager.get_slot(x))
                         .unwrap_or(0),
+                    pbr_arm,
                     normal_id: object
                         .normal
                         .as_ref()
@@ -284,7 +375,6 @@ fn main_pass(world: &mut World) {
                         .unwrap_or(0),
 
                     pbr_id,
-                    pad: 0,
                 }),
             );
             let mesh_handle = pipeline.mesh_manager.get_handle(&object.mesh).unwrap();
@@ -330,49 +420,6 @@ fn resize_framebuffer(world: &mut World, event: &ResizeEvent) {
         event.0.width,
         event.0.height,
     ));
-}
-
-struct FrameGlobals {
-    buffer: wgpu::Buffer,
-    layout: wgpu::BindGroupLayout,
-    bind_group: wgpu::BindGroup,
-}
-
-impl FrameGlobals {
-    fn new(device: &wgpu::Device) -> Self {
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: mem::size_of::<GPUFrameGlobals>() as _,
-            mapped_at_creation: false,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
-        });
-        Self {
-            layout,
-            buffer,
-            bind_group,
-        }
-    }
 }
 
 #[repr(C)]

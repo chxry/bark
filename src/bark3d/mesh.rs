@@ -1,10 +1,11 @@
+use super::DEFAULT_BUFFER_SIZE;
 use crate::assets::Handle;
 use crate::cast_bytes_slice;
+use crate::gfx::grow_buffer;
 use glam::{Vec2, Vec3, Vec4};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufReader, Read};
 use std::mem;
-use std::num::NonZero;
 use tracing::debug;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -34,7 +35,7 @@ impl MeshManager {
     pub fn new(device: &wgpu::Device) -> Self {
         let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 0,
+            size: DEFAULT_BUFFER_SIZE,
             mapped_at_creation: false,
             usage: wgpu::BufferUsages::VERTEX
                 | wgpu::BufferUsages::COPY_SRC
@@ -42,7 +43,7 @@ impl MeshManager {
         });
         let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: 0,
+            size: DEFAULT_BUFFER_SIZE,
             mapped_at_creation: false,
             usage: wgpu::BufferUsages::INDEX
                 | wgpu::BufferUsages::COPY_SRC
@@ -141,41 +142,6 @@ pub struct MeshHandle {
     pub index_count: u32,
 }
 
-fn resized_buffer(
-    device: &wgpu::Device,
-    buffer: &wgpu::Buffer,
-    new_size: wgpu::BufferAddress,
-) -> wgpu::Buffer {
-    let new_size = wgpu::util::align_to(
-        (buffer.size() * 3 / 2).max(new_size),
-        wgpu::COPY_BUFFER_ALIGNMENT,
-    );
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: new_size,
-        mapped_at_creation: false,
-        usage: buffer.usage(),
-    })
-}
-
-fn grow_buffer(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    encoder: &mut wgpu::CommandEncoder,
-    buffer: &mut wgpu::Buffer,
-    current_usage: wgpu::BufferAddress,
-    needed: wgpu::BufferAddress,
-) -> wgpu::QueueWriteBufferView {
-    if needed > buffer.size() - current_usage {
-        let new_buffer = resized_buffer(device, buffer, current_usage + needed);
-        encoder.copy_buffer_to_buffer(buffer, 0, &new_buffer, 0, current_usage);
-        *buffer = new_buffer;
-    }
-    queue
-        .write_buffer_with(buffer, current_usage, NonZero::new(needed).unwrap())
-        .unwrap()
-}
-
 pub struct Mesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
@@ -217,19 +183,11 @@ pub fn load_mesh(reader: impl Read) -> Mesh {
         let v1 = &mesh.vertices[i1];
         let v2 = &mesh.vertices[i2];
 
-        let p0 = v0.pos;
-        let p1 = v1.pos;
-        let p2 = v2.pos;
+        let dp1 = v1.pos - v0.pos;
+        let dp2 = v2.pos - v0.pos;
 
-        let uv0 = v0.uv;
-        let uv1 = v1.uv;
-        let uv2 = v2.uv;
-
-        let dp1 = p1 - p0;
-        let dp2 = p2 - p0;
-
-        let duv1 = uv1 - uv0;
-        let duv2 = uv2 - uv0;
+        let duv1 = v1.uv - v0.uv;
+        let duv2 = v2.uv - v0.uv;
 
         let r = 1.0 / (duv1.x * duv2.y - duv1.y * duv2.x);
 

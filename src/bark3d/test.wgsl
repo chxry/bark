@@ -17,16 +17,26 @@ struct Object {
   transform: mat4x4<f32>,
   normal_transform: mat3x3<f32>,
   diffuse_colour: vec3<f32>,
-  pbr_arm: vec3<f32>,
   diffuse_id: u32,
+  pbr_arm: vec3<f32>,
   normal_id: u32,
   pbr_id: u32
 }
 
+struct Light {
+  direction: vec3<f32>,
+  tag: u32
+}
+
 @group(0) @binding(0)
 var<uniform> frame: FrameGlobals;
+
+@group(0) @binding(1)
+var<storage, read> lights: array<Light>;
+
 @group(1) @binding(0)
 var textures: binding_array<texture_2d<f32>>;
+
 @group(1) @binding(1)
 var tex_sampler: sampler;
 
@@ -68,32 +78,40 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     normal = normalize(tbn * (normal_ts * 2.0 - vec3(1.0)));
   }
 
+  let view_dir = normalize(frame.camera_pos - in.world_pos);
+
   let pbr = textureSample(textures[obj.pbr_id], tex_sampler, in.uv).rgb * obj.pbr_arm;
   let ao = pbr.r;
   let roughness = clamp(pbr.g, 0.04, 1.0);
   let metallic = pbr.b;
 
   let ambient = diffuse_colour * 0.05 * ao;
+  
+  var light = ambient;
+  for (var i = 0u;;i++) {
+    if (lights[i].tag == 0) {
+      break;
+    }
+    
+    let light_dir = -lights[i].direction;
+    let half_dir = normalize(light_dir + view_dir);
+    let n_dot_l = max(dot(normal, light_dir), 0.0);
+    let n_dot_v = max(dot(normal, view_dir), 0.0);
+    let h_dot_v = max(dot(half_dir, view_dir), 0.0);
 
-  let light_dir = normalize(vec3(-1.0, 0.5, 0.0));
-  let view_dir = normalize(frame.camera_pos - in.world_pos);
-  let half_dir = normalize(light_dir + view_dir);
-  let n_dot_l = max(dot(normal, light_dir), 0.0);
-  let n_dot_v = max(dot(normal, view_dir), 0.0);
-  let h_dot_v = max(dot(half_dir, view_dir), 0.0);
+    let f0 = mix(vec3(0.04), diffuse_colour, metallic);
+    let d = distribution_ggx(normal, half_dir, roughness);
+    let g = geometry_smith(normal, view_dir, light_dir, roughness);
+    let f = fresnel_schlick(h_dot_v, f0);
 
-  let f0 = mix(vec3(0.04), diffuse_colour, metallic);
-  let d = distribution_ggx(normal, half_dir, roughness);
-  let g = geometry_smith(normal, view_dir, light_dir, roughness);
-  let f = fresnel_schlick(h_dot_v, f0);
+    let denom = max(4.0 * n_dot_l * n_dot_v, 0.001);
+    let specular = d * g * f / denom;
 
-  let denom = max(4.0 * n_dot_l * n_dot_v, 0.001);
-  let specular = d * g * f / denom;
+    let kd = (1.0 - f) * (1.0 - metallic);
+    let diffuse = kd * diffuse_colour / pi;
 
-  let kd = (1.0 - f) * (1.0 - metallic);
-  let diffuse = kd * diffuse_colour / pi;
-
-  let light = (diffuse + specular) * n_dot_l + ambient;
+    light += (diffuse + specular) * n_dot_l;
+  }
 
   return vec4(light, 1.0);
 }

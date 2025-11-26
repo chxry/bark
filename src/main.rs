@@ -1,7 +1,7 @@
 use bark::assets::Assets;
 use bark::bark3d::mesh::MeshSource;
 use bark::bark3d::texture::TextureSource;
-use bark::bark3d::{self, Camera, PbrMode, RenderObject, Transform};
+use bark::bark3d::{self, Camera, Light, PbrMode, RenderObject, Transform};
 use bark::ecs::World;
 use bark::{app, intersect};
 use glam::{Quat, Vec3};
@@ -15,7 +15,7 @@ fn main() {
         .init();
 
     let mut world = World::default();
-    world.insert_system_with(bark3d::init, scene);
+    world.insert_system_with(bark3d::init, scene2);
     world.insert_system_with(app::update, update);
     world.queue_and_run(bark3d::bark3d);
 }
@@ -108,10 +108,13 @@ fn scene(world: &mut World) {
             diffuse: None,
             normal: None,
             pbr: PbrMode::Values {
-                roughness: 0.0,
+                roughness: 0.5,
                 metallic: 0.0,
             },
         });
+    world
+        .spawn()
+        .insert(Light::Directional(Vec3::new(1.0, -0.5, 0.0)));
 }
 
 fn scene2(world: &mut World) {
@@ -126,8 +129,8 @@ fn scene2(world: &mut World) {
 
     for y in 0..rows {
         for x in 0..cols {
-            let roughness = x as f32 / rows as f32;
-            let metallic = y as f32 / cols as f32;
+            let roughness = x as f32 / (rows - 1) as f32;
+            let metallic = 1.0 - y as f32 / (cols - 1) as f32;
 
             world
                 .spawn()
@@ -161,10 +164,30 @@ fn scene2(world: &mut World) {
             scale: Vec3::ONE,
         })
         .insert(Camera { fov: 1.2 });
+    world
+        .spawn()
+        .insert(Light::Directional(Vec3::new(0.0, -0.5, 0.0)))
+        .insert(LightSpin(0.0));
+    world
+        .spawn()
+        .insert(Light::Directional(Vec3::new(0.0, 0.0, 0.0)))
+        .insert(LightSpin(1.0));
 }
+
+struct LightSpin(f32);
 
 fn update(world: &mut World) {
     for (_, (t, _)) in intersect(world.get_mut::<Transform>(), world.get::<Spin>()) {
         t.rotation *= Quat::from_rotation_y(0.01);
+    }
+
+    for (_, (t, l)) in intersect(world.get_mut::<LightSpin>(), world.get_mut::<Light>()) {
+        t.0 += 0.02;
+        match l {
+            Light::Directional(dir) => {
+                dir.x = t.0.cos();
+                dir.z = t.0.sin();
+            }
+        }
     }
 }
