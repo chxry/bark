@@ -1,7 +1,7 @@
 use crate::assets::Handle;
-use image::DynamicImage;
+use image::imageops;
+use intel_tex_2::{RgbaSurface, bc7};
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
 use std::num::NonZero;
 use tracing::{debug, error};
 use wgpu::util::DeviceExt;
@@ -10,30 +10,13 @@ type TextureSlotIndex = u32;
 
 pub const MAX_BOUND_TEXTURES: TextureSlotIndex = 2048;
 
-// todo unload assets from the cpu after uploaded
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct TextureSource {
-    asset: Handle<DynamicImage>,
-    srgb: bool,
-}
-
-impl TextureSource {
-    pub fn new(asset: Handle<DynamicImage>, srgb: bool) -> Self {
-        Self { asset, srgb }
-    }
-
-    pub fn ready(&self) -> bool {
-        self.asset.loaded()
-    }
-}
-
 pub struct TextureManager {
     pub undefined_texture_view: wgpu::TextureView,
     pub layout: wgpu::BindGroupLayout,
     pub sampler: wgpu::Sampler,
     pub bind_group: wgpu::BindGroup,
     pub slots: [Option<TextureSlot>; MAX_BOUND_TEXTURES as _],
-    pub source_map: HashMap<TextureSource, TextureSlotIndex>,
+    pub handle_map: HashMap<Handle<Texture>, TextureSlotIndex>,
 }
 
 impl TextureManager {
@@ -93,7 +76,7 @@ impl TextureManager {
             sampler,
             bind_group,
             slots,
-            source_map: HashMap::new(),
+            handle_map: HashMap::new(),
         }
     }
 
@@ -101,9 +84,9 @@ impl TextureManager {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        sources: HashSet<TextureSource>,
+        handles: HashSet<Handle<Texture>>,
     ) {
-        if sources.len() > MAX_BOUND_TEXTURES as _ {
+        if handles.len() > MAX_BOUND_TEXTURES as _ {
             error!(
                 "amount of bound textures exceeds limit ({})",
                 MAX_BOUND_TEXTURES
@@ -114,7 +97,7 @@ impl TextureManager {
 
         for s in &mut self.slots {
             if let Some(slot) = s
-                && !sources.contains(&slot.source)
+                && !handles.contains(&slot.handle)
             {
                 *s = None;
                 bindings_changed = true;
@@ -122,42 +105,38 @@ impl TextureManager {
         }
 
         let mut i = 1;
-        for source in sources {
-            if !self.source_map.contains_key(&source) {
-                debug!("upload texture {:?}", source.asset);
-                let image = source.asset.get();
+        for handle in handles {
+            if !self.handle_map.contains_key(&handle) {
+                debug!("upload texture {:?}", handle.id());
                 while self.slots[i].is_some() {
                     i += 1;
                 }
+                let mip_levels = handle.width.max(handle.height).ilog2().max(1);
                 let texture = device.create_texture_with_data(
                     queue,
                     &wgpu::TextureDescriptor {
                         label: None,
                         size: wgpu::Extent3d {
-                            width: image.width(),
-                            height: image.height(),
+                            width: handle.width,
+                            height: handle.height,
                             depth_or_array_layers: 1,
                         },
-                        mip_level_count: 1,
+                        mip_level_count: mip_levels,
                         sample_count: 1,
                         dimension: wgpu::TextureDimension::D2,
-                        format: if source.srgb {
-                            wgpu::TextureFormat::Rgba8UnormSrgb
-                        } else {
-                            wgpu::TextureFormat::Rgba8Unorm
-                        },
+                        format: wgpu::TextureFormat::Bc7RgbaUnormSrgb,
                         usage: wgpu::TextureUsages::TEXTURE_BINDING,
                         view_formats: &[],
                     },
                     wgpu::util::TextureDataOrder::default(),
-                    &image.to_rgba8(),
+                    &handle.data,
                 );
                 let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
                 self.slots[i] = Some(TextureSlot {
-                    source: source.clone(),
+                    handle: handle.clone(),
                     view,
                 });
-                self.source_map.insert(source, i as _);
+                self.handle_map.insert(handle, i as _);
                 bindings_changed = true;
             }
         }
@@ -173,8 +152,8 @@ impl TextureManager {
         }
     }
 
-    pub fn get_slot(&self, source: &TextureSource) -> Option<TextureSlotIndex> {
-        self.source_map.get(source).copied()
+    pub fn get_slot(&self, handle: &Handle<Texture>) -> Option<TextureSlotIndex> {
+        self.handle_map.get(handle).copied()
     }
 
     fn build_bind_group(
@@ -206,12 +185,71 @@ impl TextureManager {
 }
 
 pub struct TextureSlot {
-    pub source: TextureSource,
+    pub handle: Handle<Texture>,
     pub view: wgpu::TextureView,
 }
 
-pub fn load_image(mut reader: impl Read) -> DynamicImage {
-    let mut buf = vec![];
-    reader.read_to_end(&mut buf).unwrap();
-    image::load_from_memory(&buf).unwrap()
+pub struct Texture {
+    width: u32,
+    height: u32,
+    data: Vec<u8>,
+}
+
+pub fn process_texture(data: &[u8]) -> Texture {
+    let image = image::load_from_memory(data).unwrap().to_rgba8();
+    let mut texture = Texture {
+        width: image.width(),
+        height: image.height(),
+        data: vec![],
+    };
+    let start = std::time::Instant::now();
+
+    let mut mip_levels = vec![image];
+    loop {
+        let current = mip_levels.last().unwrap();
+        if current.width() == 1 && current.height() == 1 {
+            break;
+        }
+
+        // todo consider srgb/normals
+        mip_levels.push(imageops::resize(
+            current,
+            (current.width() / 2).max(1),
+            (current.height() / 2).max(1),
+            imageops::FilterType::Triangle,
+        ));
+    }
+    tracing::info!("DOWNSAMPLE TIME {:?}", start.elapsed());
+
+    let start = std::time::Instant::now();
+    for mip in mip_levels {
+        let compressed = bc7::compress_blocks(
+            &bc7::alpha_basic_settings(),
+            &RgbaSurface {
+                data: &mip,
+                width: mip.width(),
+                height: mip.height(),
+                stride: mip.width() * 4,
+            },
+        );
+        texture.data.extend(&compressed);
+    }
+    tracing::info!("COMPRESS TIME {:?}", start.elapsed());
+    texture
+}
+
+pub fn save_texture(tex: &Texture) -> Vec<u8> {
+    let mut out = vec![];
+    out.extend(tex.width.to_le_bytes());
+    out.extend(tex.height.to_le_bytes());
+    out.extend(&tex.data);
+    out
+}
+
+pub fn load_texture(data: &[u8]) -> Texture {
+    Texture {
+        width: u32::from_le_bytes(data[0..4].try_into().unwrap()),
+        height: u32::from_le_bytes(data[4..8].try_into().unwrap()),
+        data: data[8..].to_vec(),
+    }
 }

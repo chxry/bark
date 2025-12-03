@@ -1,10 +1,10 @@
 pub mod mesh;
 pub mod texture;
 
-use self::mesh::{MeshManager, MeshSource, Vertex, load_mesh};
-use self::texture::{TextureManager, TextureSource, load_image};
+use self::mesh::{Mesh, MeshManager, Vertex, load_mesh};
+use self::texture::{Texture, TextureManager, load_texture};
 use crate::app::ResizeEvent;
-use crate::assets::{self, Assets};
+use crate::assets::{self, Assets, Handle};
 use crate::ecs::World;
 use crate::gfx::resized_buffer;
 use crate::{app, cast_bytes, cast_bytes_slice, gfx, intersect};
@@ -28,15 +28,16 @@ pub struct Transform {
 }
 
 pub struct RenderObject {
-    pub mesh: MeshSource,
+    pub mesh: Handle<Mesh>,
     pub diffuse_colour: Vec3,
-    pub diffuse: Option<TextureSource>,
-    pub normal: Option<TextureSource>,
+    pub diffuse: Option<Handle<Texture>>,
+    pub normal: Option<Handle<Texture>>,
     pub pbr: PbrMode,
 }
 
+#[derive(Clone)]
 pub enum PbrMode {
-    Sampled(TextureSource),
+    Sampled(Handle<Texture>),
     Values { roughness: f32, metallic: f32 },
 }
 
@@ -77,7 +78,7 @@ struct RenderPipeline {
 pub fn init(world: &mut World) {
     let assets = world.get_resource_mut::<Assets>().unwrap();
     assets.register_loader(load_mesh);
-    assets.register_loader(load_image);
+    assets.register_loader(load_texture);
 
     let renderer = world.get_resource_mut::<gfx::Renderer>().unwrap();
 
@@ -232,33 +233,22 @@ fn main_pass(world: &mut World) {
         }),
     );
 
-    let mut objects = intersect(world.get::<Transform>(), world.get::<RenderObject>())
-        .map(|(_, (t, o))| (true, t, o))
-        .collect::<Vec<_>>();
+    let objects =
+        intersect(world.get::<Transform>(), world.get::<RenderObject>()).collect::<Vec<_>>();
 
     let mut scene_textures = HashSet::new();
     let mut scene_meshes = HashSet::new();
-    for (render, _, object) in &mut objects {
-        if object.mesh.ready() {
-            scene_meshes.insert(object.mesh.clone());
-        } else {
-            *render = false;
-        }
+    for (_, (_, object)) in &objects {
+        scene_meshes.insert(object.mesh.clone());
 
-        if let Some(diffuse) = &object.diffuse
-            && diffuse.ready()
-        {
-            scene_textures.insert(diffuse.clone());
+        if let Some(diffuse) = object.diffuse.clone() {
+            scene_textures.insert(diffuse);
         }
-        if let Some(normal) = &object.normal
-            && normal.ready()
-        {
-            scene_textures.insert(normal.clone());
+        if let Some(normal) = object.normal.clone() {
+            scene_textures.insert(normal);
         }
-        if let PbrMode::Sampled(pbr) = &object.pbr
-            && pbr.ready()
-        {
-            scene_textures.insert(pbr.clone());
+        if let PbrMode::Sampled(pbr) = object.pbr.clone() {
+            scene_textures.insert(pbr);
         }
     }
 
@@ -333,11 +323,7 @@ fn main_pass(world: &mut World) {
             pipeline.mesh_manager.index_buffer.slice(..),
             wgpu::IndexFormat::Uint32,
         );
-        for (render, transform, object) in objects {
-            if !render {
-                continue;
-            }
-
+        for (_, (transform, object)) in objects {
             let transform = Affine3A::from_scale_rotation_translation(
                 transform.scale,
                 transform.rotation,

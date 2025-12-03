@@ -15,6 +15,7 @@ pub fn update(_: &mut World) {}
 pub fn render(_: &mut World) {}
 
 pub struct ResizeEvent(pub PhysicalSize<u32>);
+pub struct ExitEvent;
 
 impl ApplicationHandler for World {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -57,6 +58,10 @@ impl ApplicationHandler for World {
         if let Some(window) = self.get_resource::<Window>() {
             window.request_redraw();
         }
+    }
+
+    fn exiting(&mut self, _: &ActiveEventLoop) {
+        self.handle_event(ExitEvent);
     }
 }
 

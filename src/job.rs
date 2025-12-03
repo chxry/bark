@@ -29,4 +29,6 @@ impl ThreadPool {
     pub fn execute<J: Job>(&self, f: J) {
         self.send.send(Box::new(f)).unwrap();
     }
+
+    // todo have a way to gracefully shutdown the thread pool, and block app exit
 }

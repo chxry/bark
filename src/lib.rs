@@ -85,11 +85,11 @@ impl<K: Eq + Ord, T, U, A: Iterator<Item = (K, T)>, B: Iterator<Item = (K, U)>> 
     }
 }
 
-pub fn cast_bytes_slice<T>(t: &[T]) -> &[u8] {
+pub fn cast_bytes_slice<T>(x: &[T]) -> &[u8] {
     // safety: u8 is always valid
-    unsafe { slice::from_raw_parts(t.as_ptr() as _, mem::size_of_val(t)) }
+    unsafe { slice::from_raw_parts(x.as_ptr() as _, mem::size_of_val(x)) }
 }
 
-pub fn cast_bytes<T>(t: &T) -> &[u8] {
-    cast_bytes_slice(slice::from_ref(t))
+pub fn cast_bytes<T>(x: &T) -> &[u8] {
+    cast_bytes_slice(slice::from_ref(x))
 }

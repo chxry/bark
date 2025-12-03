@@ -1,6 +1,6 @@
 use bark::assets::Assets;
-use bark::bark3d::mesh::MeshSource;
-use bark::bark3d::texture::TextureSource;
+use bark::bark3d::mesh::Mesh;
+use bark::bark3d::texture::Texture;
 use bark::bark3d::{self, Camera, Light, PbrMode, RenderObject, Transform};
 use bark::ecs::World;
 use bark::{app, intersect};
@@ -15,7 +15,7 @@ fn main() {
         .init();
 
     let mut world = World::default();
-    world.insert_system_with(bark3d::init, scene2);
+    world.insert_system_with(bark3d::init, scene);
     world.insert_system_with(app::update, update);
     world.queue_and_run(bark3d::bark3d);
 }
@@ -25,20 +25,20 @@ struct Spin;
 fn scene(world: &mut World) {
     let assets = world.get_resource_mut::<Assets>().unwrap();
 
-    let plant_pot_mesh = assets.load("assets/potted_plant_02_pot.obj");
-    let plant_pot_diffuse = assets.load("assets/potted_plant_02_pot_diff_4k.png");
-    let plant_pot_normal = assets.load("assets/potted_plant_02_pot_nor_gl_4k.png");
-    let plant_pot_pbr = assets.load("assets/potted_plant_02_pot_arm_4k.png");
+    let plant_pot_mesh = assets.load("potted_plant_02_pot.obj");
+    let plant_pot_diffuse = assets.load("potted_plant_02_pot_diff_4k.png");
+    let plant_pot_normal = assets.load("potted_plant_02_pot_nor_gl_4k.png");
+    let plant_pot_pbr = assets.load("potted_plant_02_pot_arm_4k.png");
 
-    let plant_leaves_mesh = assets.load("assets/potted_plant_02_leaves.obj");
-    let plant_leaves_diffuse = assets.load("assets/potted_plant_02_leaves_diff_4k.png");
-    let plant_leaves_normal = assets.load("assets/potted_plant_02_leaves_nor_gl_4k.png");
-    let plant_leaves_pbr = assets.load("assets/potted_plant_02_leaves_arm_4k.png");
+    let plant_leaves_mesh = assets.load("potted_plant_02_leaves.obj");
+    let plant_leaves_diffuse = assets.load("potted_plant_02_leaves_diff_4k.png");
+    let plant_leaves_normal = assets.load("potted_plant_02_leaves_nor_gl_4k.png");
+    let plant_leaves_pbr = assets.load("potted_plant_02_leaves_arm_4k.png");
 
-    let garfield_mesh = assets.load("assets/garfield.obj");
-    let garfield_diffuse = assets.load("assets/garfield.png");
+    let garfield_mesh = assets.load("garfield.obj");
+    let garfield_diffuse = assets.load("garfield.png");
 
-    let plane_mesh = assets.load("assets/plane.obj");
+    let plane_mesh = assets.load("plane.obj");
 
     world
         .spawn()
@@ -56,11 +56,11 @@ fn scene(world: &mut World) {
             scale: Vec3::splat(2.5),
         })
         .insert(RenderObject {
-            mesh: MeshSource::new(plant_pot_mesh),
+            mesh: plant_pot_mesh,
             diffuse_colour: Vec3::ONE,
-            diffuse: Some(TextureSource::new(plant_pot_diffuse, true)),
-            normal: Some(TextureSource::new(plant_pot_normal, false)),
-            pbr: PbrMode::Sampled(TextureSource::new(plant_pot_pbr, false)),
+            diffuse: Some(plant_pot_diffuse),
+            normal: Some(plant_pot_normal),
+            pbr: PbrMode::Sampled(plant_pot_pbr),
         })
         .insert(Spin);
     world
@@ -71,11 +71,11 @@ fn scene(world: &mut World) {
             scale: Vec3::splat(2.5),
         })
         .insert(RenderObject {
-            mesh: MeshSource::new(plant_leaves_mesh),
+            mesh: plant_leaves_mesh,
             diffuse_colour: Vec3::ONE,
-            diffuse: Some(TextureSource::new(plant_leaves_diffuse, true)),
-            normal: Some(TextureSource::new(plant_leaves_normal, false)),
-            pbr: PbrMode::Sampled(TextureSource::new(plant_leaves_pbr, false)),
+            diffuse: Some(plant_leaves_diffuse),
+            normal: Some(plant_leaves_normal),
+            pbr: PbrMode::Sampled(plant_leaves_pbr),
         })
         .insert(Spin);
     world
@@ -86,9 +86,9 @@ fn scene(world: &mut World) {
             scale: Vec3::ONE,
         })
         .insert(RenderObject {
-            mesh: MeshSource::new(garfield_mesh),
+            mesh: garfield_mesh,
             diffuse_colour: Vec3::ONE,
-            diffuse: Some(TextureSource::new(garfield_diffuse.clone(), true)),
+            diffuse: Some(garfield_diffuse),
             normal: None,
             pbr: PbrMode::Values {
                 roughness: 0.5,
@@ -103,7 +103,7 @@ fn scene(world: &mut World) {
             scale: Vec3::splat(10.0),
         })
         .insert(RenderObject {
-            mesh: MeshSource::new(plane_mesh),
+            mesh: plane_mesh,
             diffuse_colour: Vec3::splat(0.95),
             diffuse: None,
             normal: None,
@@ -120,12 +120,13 @@ fn scene(world: &mut World) {
 fn scene2(world: &mut World) {
     let assets = world.get_resource_mut::<Assets>().unwrap();
 
-    let sphere_mesh = assets.load("assets/sphere.obj");
+    let sphere_mesh = assets.load::<Mesh>("garfield.obj");
+    let texture = assets.load::<Texture>("garfield.png");
 
     let rows = 10;
     let cols = 10;
     let spacing = 1.25;
-    let scale = 0.5;
+    let scale = 0.25;
 
     for y in 0..rows {
         for x in 0..cols {
@@ -140,15 +141,18 @@ fn scene2(world: &mut World) {
                     scale: Vec3::splat(scale),
                 })
                 .insert(RenderObject {
-                    mesh: MeshSource::new(sphere_mesh.clone()),
-                    diffuse_colour: Vec3::new(1.0, 0.0, 0.0),
-                    diffuse: None,
+                    mesh: sphere_mesh.clone(),
+                    // diffuse_colour: Vec3::new(1.0,0.0,0.0),
+                    // diffuse: None,
+                    diffuse_colour: Vec3::ONE,
+                    diffuse: Some(texture.clone()),
                     normal: None,
                     pbr: PbrMode::Values {
                         roughness,
                         metallic,
                     },
-                });
+                })
+                .insert(Spin);
         }
     }
 

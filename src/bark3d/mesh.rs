@@ -8,27 +8,12 @@ use std::io::{BufReader, Read};
 use std::mem;
 use tracing::debug;
 
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct MeshSource {
-    asset: Handle<Mesh>,
-}
-
-impl MeshSource {
-    pub fn new(asset: Handle<Mesh>) -> Self {
-        Self { asset }
-    }
-
-    pub fn ready(&self) -> bool {
-        self.asset.loaded()
-    }
-}
-
 pub struct MeshManager {
     pub vertex_buffer: wgpu::Buffer,
     pub vertex_end: wgpu::BufferAddress,
     pub index_buffer: wgpu::Buffer,
     pub index_end: wgpu::BufferAddress,
-    pub source_map: HashMap<MeshSource, MeshHandle>,
+    pub handle_map: HashMap<Handle<Mesh>, MeshHandle>,
 }
 
 impl MeshManager {
@@ -54,7 +39,7 @@ impl MeshManager {
             vertex_end: 0,
             index_buffer,
             index_end: 0,
-            source_map: HashMap::new(),
+            handle_map: HashMap::new(),
         }
     }
 
@@ -63,11 +48,11 @@ impl MeshManager {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        sources: HashSet<MeshSource>,
+        handles: HashSet<Handle<Mesh>>,
     ) {
         let mut to_upload = vec![];
-        for source in sources {
-            if !self.source_map.contains_key(&source) {
+        for source in handles {
+            if !self.handle_map.contains_key(&source) {
                 to_upload.push(source);
             }
         }
@@ -75,8 +60,7 @@ impl MeshManager {
         if !to_upload.is_empty() {
             let mut vertex_resize = 0;
             let mut index_resize = 0;
-            for source in &to_upload {
-                let mesh = source.asset.get();
+            for mesh in &to_upload {
                 vertex_resize += mesh.vertices.len() as wgpu::BufferAddress;
                 index_resize += mesh.indices.len() as wgpu::BufferAddress;
             }
@@ -86,52 +70,48 @@ impl MeshManager {
                 queue,
                 encoder,
                 &mut self.vertex_buffer,
-                self.vertex_end * mem::size_of::<Vertex>() as wgpu::BufferAddress,
-                vertex_resize * mem::size_of::<Vertex>() as wgpu::BufferAddress,
+                self.vertex_end,
+                vertex_resize,
             );
             let mut index_view = grow_buffer(
                 device,
                 queue,
                 encoder,
                 &mut self.index_buffer,
-                self.index_end * mem::size_of::<u32>() as wgpu::BufferAddress,
-                index_resize * mem::size_of::<u32>() as wgpu::BufferAddress,
+                self.index_end,
+                index_resize,
             );
 
             let mut current_vertex_offset = 0;
             let mut current_index_offset = 0;
 
-            for source in to_upload {
-                debug!("upload mesh {:?}", source.asset);
-                let mesh = source.asset.get();
+            for mesh in to_upload {
+                debug!("upload mesh {:?}", mesh.id());
 
                 let handle = MeshHandle {
-                    vertex_start: self.vertex_end,
-                    index_start: self.index_end,
-                    index_count: mesh.indices.len() as _,
+                    vertex_start: self.vertex_end / mem::size_of::<Vertex>() as wgpu::BufferAddress,
+                    index_start: self.index_end / mem::size_of::<u32>() as wgpu::BufferAddress,
+                    index_count: (mesh.indices.len() / mem::size_of::<u32>()) as _,
                 };
 
                 self.vertex_end += mesh.vertices.len() as wgpu::BufferAddress;
                 self.index_end += mesh.indices.len() as wgpu::BufferAddress;
 
-                let vertex_end =
-                    current_vertex_offset + mesh.vertices.len() * mem::size_of::<Vertex>();
-                vertex_view[current_vertex_offset..vertex_end]
-                    .copy_from_slice(cast_bytes_slice(&mesh.vertices));
+                let vertex_end = current_vertex_offset + mesh.vertices.len();
+                vertex_view[current_vertex_offset..vertex_end].copy_from_slice(&mesh.vertices);
                 current_vertex_offset = vertex_end;
 
-                let index_end = current_index_offset + mesh.indices.len() * mem::size_of::<u32>();
-                index_view[current_index_offset..index_end]
-                    .copy_from_slice(cast_bytes_slice(&mesh.indices));
+                let index_end = current_index_offset + mesh.indices.len();
+                index_view[current_index_offset..index_end].copy_from_slice(&mesh.indices);
                 current_index_offset = index_end;
 
-                self.source_map.insert(source, handle);
+                self.handle_map.insert(mesh, handle);
             }
         }
     }
 
-    pub fn get_handle(&self, source: &MeshSource) -> Option<MeshHandle> {
-        self.source_map.get(source).copied()
+    pub fn get_handle(&self, handle: &Handle<Mesh>) -> Option<MeshHandle> {
+        self.handle_map.get(handle).copied()
     }
 }
 
@@ -143,11 +123,12 @@ pub struct MeshHandle {
 }
 
 pub struct Mesh {
-    pub vertices: Vec<Vertex>,
-    pub indices: Vec<u32>,
+    vertices: Vec<u8>,
+    indices: Vec<u8>,
 }
 
 #[repr(C)]
+#[derive(Copy, Clone)]
 pub struct Vertex {
     pub pos: Vec3,
     pub uv: Vec2,
@@ -155,33 +136,31 @@ pub struct Vertex {
     pub tangent: Vec4,
 }
 
-pub fn load_mesh(reader: impl Read) -> Mesh {
-    let obj = obj::load_obj(BufReader::new(reader)).unwrap();
-    let mut mesh = Mesh {
-        vertices: obj
-            .vertices
-            .into_iter()
-            .map(|v: obj::TexturedVertex| Vertex {
-                pos: Vec3::from(v.position),
-                uv: Vec2::new(v.texture[0], 1.0 - v.texture[1]),
-                normal: Vec3::from(v.normal),
-                tangent: Vec4::ZERO,
-            })
-            .collect(),
-        indices: obj.indices,
-    };
+pub fn process_mesh(data: &[u8]) -> Mesh {
+    let obj = obj::load_obj::<obj::TexturedVertex, _, u32>(data).unwrap();
+    let mut vertices = obj
+        .vertices
+        .into_iter()
+        .map(|v| Vertex {
+            pos: Vec3::from(v.position),
+            uv: Vec2::new(v.texture[0], 1.0 - v.texture[1]),
+            normal: Vec3::from(v.normal),
+            tangent: Vec4::ZERO,
+        })
+        .collect::<Vec<_>>();
+    let indices = obj.indices;
 
-    let mut tangents = vec![Vec3::ZERO; mesh.vertices.len()];
-    let mut bitangents = vec![Vec3::ZERO; mesh.vertices.len()];
+    let mut tangents = vec![Vec3::ZERO; vertices.len()];
+    let mut bitangents = vec![Vec3::ZERO; vertices.len()];
 
-    for tri in mesh.indices.chunks_exact(3) {
+    for tri in indices.chunks_exact(3) {
         let i0 = tri[0] as usize;
         let i1 = tri[1] as usize;
         let i2 = tri[2] as usize;
 
-        let v0 = &mesh.vertices[i0];
-        let v1 = &mesh.vertices[i1];
-        let v2 = &mesh.vertices[i2];
+        let v0 = &vertices[i0];
+        let v1 = &vertices[i1];
+        let v2 = &vertices[i2];
 
         let dp1 = v1.pos - v0.pos;
         let dp2 = v2.pos - v0.pos;
@@ -203,7 +182,7 @@ pub fn load_mesh(reader: impl Read) -> Mesh {
         bitangents[i2] += bitangent;
     }
 
-    for (i, v) in mesh.vertices.iter_mut().enumerate() {
+    for (i, v) in vertices.iter_mut().enumerate() {
         let n = v.normal;
         let t = tangents[i];
 
@@ -218,5 +197,27 @@ pub fn load_mesh(reader: impl Read) -> Mesh {
 
         v.tangent = tangent.extend(handedness);
     }
-    mesh
+    Mesh {
+        vertices: cast_bytes_slice(&vertices).to_vec(),
+        indices: cast_bytes_slice(&indices).to_vec(),
+    }
+}
+
+pub fn save_mesh(mesh: &Mesh) -> Vec<u8> {
+    let mut data = vec![];
+    data.extend((mesh.vertices.len() as u32).to_le_bytes());
+    data.extend((mesh.indices.len() as u32).to_le_bytes());
+    data.extend(&mesh.vertices);
+    data.extend(&mesh.indices);
+    data
+}
+
+pub fn load_mesh(data: &[u8]) -> Mesh {
+    let vertices_len = u32::from_le_bytes(data[0..4].try_into().unwrap());
+    let indices_len = u32::from_le_bytes(data[4..8].try_into().unwrap());
+    let vertex_end = 8 + vertices_len as usize;
+    Mesh {
+        vertices: data[8..vertex_end].to_vec(),
+        indices: data[vertex_end..vertex_end + indices_len as usize].to_vec(),
+    }
 }
