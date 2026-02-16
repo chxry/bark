@@ -7,6 +7,7 @@ use crate::app::ResizeEvent;
 use crate::assets::{self, Assets, Handle};
 use crate::ecs::World;
 use crate::gfx::resized_buffer;
+use crate::job;
 use crate::{app, cast_bytes, cast_bytes_slice, gfx, intersect};
 use glam::{Affine3A, Mat3A, Mat4, Quat, Vec3};
 use std::collections::HashSet;
@@ -17,6 +18,7 @@ pub const DEFAULT_BUFFER_SIZE: wgpu::BufferAddress = 1024 * 1024;
 pub fn bark3d(world: &mut World) {
     world.insert_system_before(gfx::init, app::init);
     world.insert_system_before(init, gfx::init);
+    world.insert_system_before(assets::init, job::init);
     world.insert_system_before(init, assets::init);
     world.queue_system(init);
 }
@@ -233,22 +235,33 @@ fn main_pass(world: &mut World) {
         }),
     );
 
-    let objects =
-        intersect(world.get::<Transform>(), world.get::<RenderObject>()).collect::<Vec<_>>();
+    let mut objects = intersect(world.get::<Transform>(), world.get::<RenderObject>())
+        .map(|(_, (t, o))| (true, t, o))
+        .collect::<Vec<_>>();
 
     let mut scene_textures = HashSet::new();
     let mut scene_meshes = HashSet::new();
-    for (_, (_, object)) in &objects {
-        scene_meshes.insert(object.mesh.clone());
+    for (render, _, object) in &mut objects {
+        if object.mesh.loaded() {
+            scene_meshes.insert(object.mesh.clone());
+        } else {
+            *render = false;
+        }
 
-        if let Some(diffuse) = object.diffuse.clone() {
-            scene_textures.insert(diffuse);
+        if let Some(diffuse) = &object.diffuse
+            && diffuse.loaded()
+        {
+            scene_textures.insert(diffuse.clone());
         }
-        if let Some(normal) = object.normal.clone() {
-            scene_textures.insert(normal);
+        if let Some(normal) = &object.normal
+            && normal.loaded()
+        {
+            scene_textures.insert(normal.clone());
         }
-        if let PbrMode::Sampled(pbr) = object.pbr.clone() {
-            scene_textures.insert(pbr);
+        if let PbrMode::Sampled(pbr) = &object.pbr
+            && pbr.loaded()
+        {
+            scene_textures.insert(pbr.clone());
         }
     }
 
@@ -323,7 +336,10 @@ fn main_pass(world: &mut World) {
             pipeline.mesh_manager.index_buffer.slice(..),
             wgpu::IndexFormat::Uint32,
         );
-        for (_, (transform, object)) in objects {
+        for (render, transform, object) in objects {
+            if !render {
+                continue;
+            }
             let transform = Affine3A::from_scale_rotation_translation(
                 transform.scale,
                 transform.rotation,

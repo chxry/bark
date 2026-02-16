@@ -1,50 +1,76 @@
 {
-  "potted_plant_02_pot_nor_gl_4k.png": {
-    "ty": "texture",
-    "hash": "5feffedf1ae29c24"
-  },
-  "potted_plant_02_leaves_diff_4k.png": {
-    "ty": "texture",
-    "hash": "a99282130267410c"
-  },
-  "potted_plant_02_leaves_nor_gl_4k.png": {
-    "ty": "texture",
-    "hash": "b71cb05d285eaa0f"
-  },
-  "sphere.obj": {
+  "plane.obj": {
     "ty": "mesh",
-    "hash": "795d561462e0ce25"
+    "hash": "ee59f129f65a4633",
+    "options": {}
   },
   "potted_plant_02_leaves.obj": {
     "ty": "mesh",
-    "hash": "a2b3d6fac5d1a8f5"
+    "hash": "a2b3d6fac5d1a8f5",
+    "options": {}
   },
-  "potted_plant_02_leaves_arm_4k.png": {
-    "ty": "texture",
-    "hash": "db6e5592bf412049"
-  },
-  "potted_plant_02_pot_diff_4k.png": {
-    "ty": "texture",
-    "hash": "a662928f42d80571"
-  },
-  "potted_plant_02_pot.obj": {
+  "sphere.obj": {
     "ty": "mesh",
-    "hash": "ba4e1da209e66ac7"
+    "hash": "795d561462e0ce25",
+    "options": {}
   },
   "garfield.obj": {
     "ty": "mesh",
-    "hash": "9516adc4838483bc"
+    "hash": "9516adc4838483bc",
+    "options": {}
   },
-  "plane.obj": {
-    "ty": "mesh",
-    "hash": "ee59f129f65a4633"
+  "potted_plant_02_pot_diff_4k.png": {
+    "ty": "texture",
+    "hash": "a662928f42d80571",
+    "options": {
+      "mode": "srgb"
+    }
   },
   "potted_plant_02_pot_arm_4k.png": {
     "ty": "texture",
-    "hash": "58ef2a1961b2cf33"
+    "hash": "58ef2a1961b2cf33",
+    "options": {
+      "mode": "linear"
+    }
+  },
+  "potted_plant_02_pot_nor_gl_4k.png": {
+    "ty": "texture",
+    "hash": "5feffedf1ae29c24",
+    "options": {
+      "mode": "normal"
+    }
+  },
+  "potted_plant_02_leaves_arm_4k.png": {
+    "ty": "texture",
+    "hash": "db6e5592bf412049",
+    "options": {
+      "mode": "linear"
+    }
+  },
+  "potted_plant_02_pot.obj": {
+    "ty": "mesh",
+    "hash": "ba4e1da209e66ac7",
+    "options": {}
+  },
+  "potted_plant_02_leaves_nor_gl_4k.png": {
+    "ty": "texture",
+    "hash": "b71cb05d285eaa0f",
+    "options": {
+      "mode": "normal"
+    }
   },
   "garfield.png": {
     "ty": "texture",
-    "hash": "18de372f5faa33d8"
+    "hash": "18de372f5faa33d8",
+    "options": {
+      "mode": "srgb"
+    }
+  },
+  "potted_plant_02_leaves_diff_4k.png": {
+    "ty": "texture",
+    "hash": "a99282130267410c",
+    "options": {
+      "mode": "srgb"
+    }
   }
 }

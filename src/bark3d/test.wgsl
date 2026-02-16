@@ -63,7 +63,7 @@ fn vs_main(
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
   let base_colour = textureSample(textures[obj.diffuse_id], tex_sampler, in.uv);
-  if base_colour.a < 0.01 {
+  if base_colour.a < 0.25 {
     discard;
   }
   let diffuse_colour = base_colour.rgb * obj.diffuse_colour;

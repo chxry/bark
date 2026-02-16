@@ -4,7 +4,6 @@ use crate::cast_bytes_slice;
 use crate::gfx::grow_buffer;
 use glam::{Vec2, Vec3, Vec4};
 use std::collections::{HashMap, HashSet};
-use std::io::{BufReader, Read};
 use std::mem;
 use tracing::debug;
 
@@ -51,16 +50,17 @@ impl MeshManager {
         handles: HashSet<Handle<Mesh>>,
     ) {
         let mut to_upload = vec![];
-        for source in handles {
-            if !self.handle_map.contains_key(&source) {
-                to_upload.push(source);
+        for handle in handles {
+            if !self.handle_map.contains_key(&handle) {
+                to_upload.push(handle);
             }
         }
 
         if !to_upload.is_empty() {
             let mut vertex_resize = 0;
             let mut index_resize = 0;
-            for mesh in &to_upload {
+            for handle in &to_upload {
+                let mesh = handle.get();
                 vertex_resize += mesh.vertices.len() as wgpu::BufferAddress;
                 index_resize += mesh.indices.len() as wgpu::BufferAddress;
             }
@@ -85,10 +85,11 @@ impl MeshManager {
             let mut current_vertex_offset = 0;
             let mut current_index_offset = 0;
 
-            for mesh in to_upload {
-                debug!("upload mesh {:?}", mesh.id());
+            for handle in to_upload {
+                debug!("upload mesh {:?}", handle.id());
+                let mesh = handle.get();
 
-                let handle = MeshHandle {
+                let mesh_handle = MeshHandle {
                     vertex_start: self.vertex_end / mem::size_of::<Vertex>() as wgpu::BufferAddress,
                     index_start: self.index_end / mem::size_of::<u32>() as wgpu::BufferAddress,
                     index_count: (mesh.indices.len() / mem::size_of::<u32>()) as _,
@@ -105,7 +106,7 @@ impl MeshManager {
                 index_view[current_index_offset..index_end].copy_from_slice(&mesh.indices);
                 current_index_offset = index_end;
 
-                self.handle_map.insert(mesh, handle);
+                self.handle_map.insert(handle, mesh_handle);
             }
         }
     }
@@ -150,6 +151,7 @@ pub fn process_mesh(data: &[u8]) -> Mesh {
         .collect::<Vec<_>>();
     let indices = obj.indices;
 
+    let start = std::time::Instant::now();
     let mut tangents = vec![Vec3::ZERO; vertices.len()];
     let mut bitangents = vec![Vec3::ZERO; vertices.len()];
 
@@ -197,6 +199,8 @@ pub fn process_mesh(data: &[u8]) -> Mesh {
 
         v.tangent = tangent.extend(handedness);
     }
+    tracing::info!("TANGENT TIME {:?}", start.elapsed());
+
     Mesh {
         vertices: cast_bytes_slice(&vertices).to_vec(),
         indices: cast_bytes_slice(&indices).to_vec(),

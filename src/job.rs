@@ -1,6 +1,11 @@
-use std::sync::mpmc;
+use crate::ecs::World;
+use std::sync::{Arc, mpmc};
 use std::thread;
 use tracing::debug;
+
+pub fn init(world: &mut World) {
+    world.insert_resource(Arc::new(ThreadPool::new()));
+}
 
 pub trait Job = FnOnce() + Send + 'static;
 

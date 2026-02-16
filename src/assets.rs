@@ -9,8 +9,7 @@ use std::any::{self, Any};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
-use std::ops::Deref;
-// use std::sync::OnceLock;
+use std::sync::OnceLock;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 use std::{fmt, thread};
@@ -23,20 +22,23 @@ const MANIFEST_PATH: &str = "assets/manifest.json";
 const CACHE_DIR: &str = ".bark-cache";
 
 pub fn init(world: &mut World) {
-    world.insert_resource(Assets::new());
+    let thread_pool = world.get_resource::<Arc<ThreadPool>>().unwrap();
+    world.insert_resource(Assets::new(thread_pool.clone()));
     world.add_event_handler(exit_save_manifest);
 }
 
 pub struct Assets {
-    provider: AssetProvider,
+    provider: Arc<AssetProvider>,
     types: HashMap<TypeIdNamed, Box<dyn Any>>,
+    thread_pool: Arc<ThreadPool>,
 }
 
 impl Assets {
-    pub fn new() -> Self {
+    pub fn new(thread_pool: Arc<ThreadPool>) -> Self {
         Self {
-            provider: AssetProvider::new(),
+            provider: Arc::new(AssetProvider::new(thread_pool.clone())),
             types: HashMap::new(),
+            thread_pool,
         }
     }
 
@@ -56,8 +58,15 @@ impl Assets {
                     None => {
                         let handle = Handle(Arc::new(HandleData {
                             id: path.to_string(),
-                            data: (ty.loader)(&self.provider.get(&path.to_string())),
+                            data: OnceLock::new(),
                         }));
+
+                        let handle2 = handle.clone();
+                        let loader = ty.loader.clone();
+                        let provider = self.provider.clone();
+                        self.thread_pool.execute(move || {
+                            let _ = handle2.0.data.set(loader(&provider.get(handle2.id())));
+                        });
 
                         ty.storage
                             .insert(handle.id().clone(), Arc::downgrade(&handle.0));
@@ -77,16 +86,19 @@ pub trait AssetLoader<T: Any> = Fn(&[u8]) -> T + Send + Sync + 'static;
 pub struct Handle<T>(Arc<HandleData<T>>);
 
 impl<T> Handle<T> {
+    pub fn loaded(&self) -> bool {
+        self.0.data.get().is_some()
+    }
+    pub fn try_get(&self) -> Option<&T> {
+        self.0.data.get()
+    }
+
+    pub fn get(&self) -> &T {
+        self.try_get().unwrap()
+    }
+
     pub fn id(&self) -> &AssetId {
         &self.0.id
-    }
-}
-
-impl<T> Deref for Handle<T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        &self.0.data
     }
 }
 
@@ -118,18 +130,18 @@ impl<T> fmt::Debug for Handle<T> {
 
 struct HandleData<T> {
     id: AssetId,
-    data: T,
+    data: OnceLock<T>,
 }
 
 struct AssetType<T: Any> {
-    loader: Box<dyn AssetLoader<T>>,
+    loader: Arc<dyn AssetLoader<T>>,
     storage: HashMap<AssetId, Weak<HandleData<T>>>,
 }
 
 impl<T: Any> AssetType<T> {
     fn new<F: AssetLoader<T>>(loader: F) -> Self {
         Self {
-            loader: Box::new(loader),
+            loader: Arc::new(loader),
             storage: HashMap::new(),
         }
     }
@@ -142,9 +154,9 @@ struct DebugAssetProvider {
 }
 
 impl DebugAssetProvider {
-    fn new() -> Self {
+    fn new(thread_pool: Arc<ThreadPool>) -> Self {
         Self {
-            asset_server: AssetServer::new(),
+            asset_server: AssetServer::new(thread_pool),
         }
     }
 
@@ -155,26 +167,28 @@ impl DebugAssetProvider {
 
 struct AssetServer {
     manifest: Manifest,
-    thread_pool: ThreadPool,
+    thread_pool: Arc<ThreadPool>,
 }
 
 impl AssetServer {
-    fn new() -> Self {
+    fn new(thread_pool: Arc<ThreadPool>) -> Self {
         let file = File::open(MANIFEST_PATH).unwrap();
         let manifest: Manifest = serde_json::from_reader(&file).unwrap();
         fs::create_dir_all(CACHE_DIR).unwrap();
 
-        let thread_pool = ThreadPool::new();
         for (path, entry) in manifest.clone() {
             thread_pool.execute(move || {
                 let raw_path = format!("{}/{}", ASSET_DIR, path);
-                // verify manifest hash
+                // todo verify manifest hash
                 if !fs::exists(entry.cached_path()).unwrap() {
                     tracing::debug!("process {} asset {:?}", entry.ty, path);
                     let raw = fs::read(raw_path).unwrap();
                     // todo
                     let data = match entry.ty.as_str() {
-                        "texture" => save_texture(&process_texture(&raw)),
+                        "texture" => save_texture(&process_texture(
+                            &raw,
+                            serde_json::from_value(entry.options.clone()).unwrap(),
+                        )),
                         "mesh" => save_mesh(&process_mesh(&raw)),
                         _ => panic!(),
                     };
@@ -191,6 +205,8 @@ impl AssetServer {
 
     fn get_asset(&self, path: &str) -> Vec<u8> {
         let path = self.manifest.get(path).unwrap().cached_path();
+        // todo do not block the thread pool
+        // instead of a thread running for each load have either a queue of processing assets or some system to correlate handles to the manifest. perhaps update handles each frame with any loaded assets
         while !fs::exists(&path).unwrap() {
             thread::sleep(Duration::from_secs(1));
         }
@@ -227,6 +243,7 @@ struct ManifestEntry {
         deserialize_with = "deserialize_hash"
     )]
     hash: u64,
+    options: serde_json::Value,
 }
 
 impl ManifestEntry {
