@@ -1,0 +1,8 @@
+[package]
+name = "bark"
+version = "0.2.0"
+edition = "2024"
+
+[dependencies]
+tracing = "0.1"
+variadics_please = "2.0"
