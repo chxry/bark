@@ -198,14 +198,16 @@ impl Schedule {
 
         for i in 0..n {
             let meta = self.systems[i].get_meta();
-            for id in &meta.after {
+            for (id, ordering) in &meta.constraints {
                 if let Some(&j) = id_to_idx.get(id) {
-                    edges.insert((j, i));
-                }
-            }
-            for id in &meta.before {
-                if let Some(&j) = id_to_idx.get(id) {
-                    edges.insert((i, j));
+                    match ordering {
+                        Ordering::Before => {
+                            edges.insert((i, j));
+                        }
+                        Ordering::After => {
+                            edges.insert((j, i));
+                        }
+                    }
                 }
             }
         }
@@ -270,13 +272,24 @@ pub trait IntoSystem<P>: Sized {
 
     fn before<T: Any>(self, _: T) -> Box<dyn System> {
         let mut sys = self.into_system();
-        sys.get_meta_mut().before.insert(TypeKey::of::<T>());
+        let meta = sys.get_meta_mut();
+        if let Some(Ordering::After) = meta
+            .constraints
+            .insert(TypeKey::of::<T>(), Ordering::Before)
+        {
+            panic!("conflicting ordering constraint for {:?}", meta.type_id);
+        }
         sys
     }
 
     fn after<T: Any>(self, _: T) -> Box<dyn System> {
         let mut sys = self.into_system();
-        sys.get_meta_mut().after.insert(TypeKey::of::<T>());
+        let meta = sys.get_meta_mut();
+        if let Some(Ordering::Before) = meta.constraints.insert(TypeKey::of::<T>(), Ordering::After)
+        {
+            panic!("conflicting ordering constraint for {:?}", meta.type_id);
+        }
+
         sys
     }
 }
@@ -290,34 +303,51 @@ impl IntoSystem<()> for Box<dyn System> {
 // enum inside the sets could shrink memory usage
 pub struct SystemMeta {
     type_id: TypeKey,
-    component_reads: HashSet<TypeKey>,
-    component_writes: HashSet<TypeKey>,
-    resource_reads: HashSet<TypeKey>,
-    resource_writes: HashSet<TypeKey>,
-    before: HashSet<TypeKey>,
-    after: HashSet<TypeKey>,
+    component_access: HashMap<TypeKey, Access>,
+    resource_access: HashMap<TypeKey, Access>,
+    constraints: HashMap<TypeKey, Ordering>,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum Access {
+    Read,
+    Write,
+}
+
+impl Access {
+    fn conflicts(&self, other: Self) -> bool {
+        *self != Access::Read || other != Access::Read
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum Ordering {
+    Before,
+    After,
 }
 
 impl SystemMeta {
     fn new(type_id: TypeKey) -> Self {
         Self {
             type_id,
-            component_reads: HashSet::new(),
-            component_writes: HashSet::new(),
-            resource_reads: HashSet::new(),
-            resource_writes: HashSet::new(),
-            before: HashSet::new(),
-            after: HashSet::new(),
+            component_access: HashMap::new(),
+            resource_access: HashMap::new(),
+            constraints: HashMap::new(),
         }
     }
 
     fn conflicts(&self, other: &Self) -> bool {
-        !self.component_writes.is_disjoint(&other.component_reads)
-            || !self.component_writes.is_disjoint(&other.component_writes)
-            || !self.component_reads.is_disjoint(&other.component_writes)
-            || !self.resource_writes.is_disjoint(&other.resource_reads)
-            || !self.resource_writes.is_disjoint(&other.resource_writes)
-            || !self.resource_reads.is_disjoint(&other.resource_writes)
+        self.component_access.iter().any(|(id, access)| {
+            other
+                .component_access
+                .get(id)
+                .is_some_and(|other| access.conflicts(*other))
+        }) || self.resource_access.iter().any(|(id, access)| {
+            other
+                .resource_access
+                .get(id)
+                .is_some_and(|other| access.conflicts(*other))
+        })
     }
 }
 
@@ -372,13 +402,13 @@ pub struct Res<'w, T>(&'w T);
 impl<'w, T: Any> SystemParam<'w> for Res<'w, T> {
     fn declare_access(meta: &mut SystemMeta) {
         let id = TypeKey::of::<T>();
-        if meta.resource_writes.contains(&id) {
+        if let Some(Access::Write) = meta.resource_access.get(&id) {
             panic!(
                 "conflicting resource access for {:?} in system {:?}",
                 id, meta.type_id.name
             );
         }
-        meta.resource_reads.insert(id);
+        meta.resource_access.insert(id, Access::Read);
     }
 
     unsafe fn fetch(world: *mut World) -> Self {
@@ -400,13 +430,13 @@ pub struct ResMut<'w, T>(&'w mut T);
 impl<'w, T: Any> SystemParam<'w> for ResMut<'w, T> {
     fn declare_access(meta: &mut SystemMeta) {
         let id = TypeKey::of::<T>();
-        if meta.resource_reads.contains(&id) || meta.resource_writes.contains(&id) {
+        if meta.resource_access.contains_key(&id) {
             panic!(
                 "conflicting resource access for {:?} in system {:?}",
                 id, meta.type_id.name
             );
         }
-        meta.resource_writes.insert(id);
+        meta.resource_access.insert(id, Access::Write);
     }
 
     unsafe fn fetch(world: *mut World) -> Self {
@@ -504,13 +534,13 @@ impl<T: Any> QueryData for &T {
 
     fn declare_access(meta: &mut SystemMeta) {
         let id = TypeKey::of::<T>();
-        if meta.component_writes.contains(&id) {
+        if let Some(Access::Write) = meta.component_access.get(&id) {
             panic!(
                 "conflicting component access for {:?} in system {:?}",
                 id, meta.type_id.name
             );
         }
-        meta.component_reads.insert(id);
+        meta.component_access.insert(id, Access::Read);
     }
 
     unsafe fn get_store(world: *mut World) -> *mut ComponentStore<T> {
@@ -529,13 +559,13 @@ impl<T: Any> QueryData for &mut T {
 
     fn declare_access(meta: &mut SystemMeta) {
         let id = TypeKey::of::<T>();
-        if meta.component_reads.contains(&id) || meta.component_writes.contains(&id) {
+        if meta.component_access.contains_key(&id) {
             panic!(
                 "conflicting component access for {:?} in system {:?}",
                 id, meta.type_id.name
             );
         }
-        meta.component_writes.insert(id);
+        meta.component_access.insert(id, Access::Write);
     }
 
     unsafe fn get_store(world: *mut World) -> *mut ComponentStore<T> {

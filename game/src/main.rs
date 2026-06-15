@@ -25,7 +25,6 @@ fn main() {
     app.run();
 }
 
-// fn test(query: Query<(&u32,)>) {
 fn test(mut query1: Query<(&u32, &f32)>, mut query2: Query<(&u32,)>) {
     for (a, b) in query1.iter() {
         tracing::info!("query1: {:?} {:?}", a, b);
