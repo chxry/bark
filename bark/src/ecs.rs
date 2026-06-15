@@ -2,7 +2,7 @@ use crate::TypeKey;
 use std::any::{self, Any};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::marker::PhantomData;
-use std::{ops, ptr};
+use std::{ops, ptr, slice};
 use tracing::{debug, trace};
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
@@ -37,7 +37,14 @@ impl World {
             .downcast_ref()
     }
 
-    pub fn get_store_mut<T: Any>(&mut self) -> &mut ComponentStore<T> {
+    pub fn get_store_mut<T: Any>(&mut self) -> Option<&mut ComponentStore<T>> {
+        self.component_stores
+            .get_mut(&TypeKey::of::<T>())?
+            .downcast_mut()
+    }
+
+    // todo: maybe consider removing
+    pub fn create_store<T: Any>(&mut self) -> &mut ComponentStore<T> {
         self.component_stores
             .entry(TypeKey::of::<T>())
             .or_insert_with(|| Box::new(ComponentStore::<T>::new()))
@@ -254,6 +261,7 @@ pub trait System {
     fn get_meta(&self) -> &SystemMeta;
     fn get_meta_mut(&mut self) -> &mut SystemMeta;
     /// safety: must only be called according to `SystemMeta`
+    /// todo: raw pointers
     unsafe fn run(&mut self, world: *mut World);
 }
 
@@ -279,6 +287,7 @@ impl IntoSystem<()> for Box<dyn System> {
     }
 }
 
+// enum inside the sets could shrink memory usage
 pub struct SystemMeta {
     type_id: TypeKey,
     component_reads: HashSet<TypeKey>,
@@ -290,9 +299,9 @@ pub struct SystemMeta {
 }
 
 impl SystemMeta {
-    fn new<F: Any>() -> Self {
+    fn new(type_id: TypeKey) -> Self {
         Self {
-            type_id: TypeKey::of::<F>(),
+            type_id,
             component_reads: HashSet::new(),
             component_writes: HashSet::new(),
             resource_reads: HashSet::new(),
@@ -341,20 +350,18 @@ macro_rules! impl_system {
             }
         }
 
-        impl<'w, F: Fn($($P),*) + Any, $($P: SystemParam<'w> + Any),*> IntoSystem<($($P,)*)> for F
-         {
-             fn into_system(self) -> Box<dyn System> {
-                 #[allow(unused_mut)]
-                 let mut meta = SystemMeta::new::<F>();
-                 $($P::declare_access(&mut meta);)*
-                 Box::new(SystemStorage {
-                     f: self,
-                     meta,
-                     params: PhantomData,
-                 })
-             }
-         }
-
+        impl<'w, F: Fn($($P),*) + Any, $($P: SystemParam<'w> + Any),*> IntoSystem<($($P,)*)> for F {
+            fn into_system(self) -> Box<dyn System> {
+                #[allow(unused_mut)]
+                let mut meta = SystemMeta::new(TypeKey::of::<F>());
+                $($P::declare_access(&mut meta);)*
+                Box::new(SystemStorage {
+                    f: self,
+                    meta,
+                    params: PhantomData,
+                })
+            }
+        }
     }
 }
 
@@ -376,7 +383,7 @@ impl<'w, T: Any> SystemParam<'w> for Res<'w, T> {
 
     unsafe fn fetch(world: *mut World) -> Self {
         // safety: we requested this in declare_access
-        Self(unsafe { (&*world).get_resource() }.unwrap())
+        Self(unsafe { (*world).get_resource() }.unwrap())
     }
 }
 
@@ -422,25 +429,122 @@ impl<T> ops::DerefMut for ResMut<'_, T> {
     }
 }
 
-struct Query<P>(P);
-
-trait QueryParam<T> {
-    fn access() -> (AccessType, TypeKey);
+pub struct Query<P> {
+    // todo: this is an idea?
+    world: *mut World,
+    params: PhantomData<P>,
 }
 
-enum AccessType {
-    Ref,
-    Mut,
+pub trait QueryData: Sized {
+    type Item;
+    fn declare_access(meta: &mut SystemMeta);
+    /// safety: must only be used according to `declare_access`
+    unsafe fn get_store(world: *mut World) -> *mut ComponentStore<Self::Item>;
+    /// safety: `store` must be valid
+    unsafe fn get_entity(store: *mut ComponentStore<Self::Item>, entity: EntityId) -> Option<Self>;
 }
 
-impl<T: Any> QueryParam<T> for &T {
-    fn access() -> (AccessType, TypeKey) {
-        (AccessType::Ref, TypeKey::of::<T>())
+pub struct QueryIter<'w, S, P> {
+    entities: slice::Iter<'w, EntityId>,
+    stores: S,
+    params: PhantomData<P>,
+}
+
+macro_rules! impl_query {
+    ($(($n:tt, $P:ident)),*) => {
+        impl<'w, $($P: QueryData),*> SystemParam<'w> for Query<($($P,)*)> {
+            fn declare_access(meta: &mut SystemMeta)  {
+                $($P::declare_access(meta);)*
+            }
+
+            unsafe fn fetch(world: *mut World) -> Self {
+                Self {
+                    world,
+                    params: PhantomData
+                }
+            }
+        }
+
+        impl<$($P: QueryData),*> Query<($($P,)*)> {
+            pub fn iter(&mut self) -> QueryIter<'_, ($(*mut ComponentStore<$P::Item>,)*), ($($P,)*)> {
+                // safety: `declare_access` lets us safely call .entities(), &mut gives `QueryIter` exclusive access
+                unsafe {
+                    QueryIter {
+                        entities: [$((*$P::get_store(self.world)).entities(),)*].iter().min_by_key(|x| x.len()).unwrap().iter(),
+                        stores: ($($P::get_store(self.world),)*),
+                        params: PhantomData
+                    }
+                }
+            }
+        }
+
+        impl<$($P: QueryData),*> Iterator for QueryIter<'_, ($(*mut ComponentStore<$P::Item>,)*), ($($P,)*)> {
+            type Item = ($($P,)*);
+
+            fn next(&mut self) -> Option<Self::Item> {
+                loop {
+                    let id = self.entities.next()?;
+                    // safety: `Query` requested this in `declare_access`
+                    unsafe {
+                        match ($($P::get_entity(self.stores.$n, *id),)*) {
+                            ($(Some($P),)*) => return Some(($($P,)*)),
+                            _ => continue,
+                        }
+                    }
+                }
+            }
+        }
+    };
+}
+
+variadics_please::all_tuples_enumerated!(impl_query, 1, 16, P);
+
+impl<T: Any> QueryData for &T {
+    type Item = T;
+
+    fn declare_access(meta: &mut SystemMeta) {
+        let id = TypeKey::of::<T>();
+        if meta.component_writes.contains(&id) {
+            panic!(
+                "conflicting component access for {:?} in system {:?}",
+                id, meta.type_id.name
+            );
+        }
+        meta.component_reads.insert(id);
+    }
+
+    unsafe fn get_store(world: *mut World) -> *mut ComponentStore<T> {
+        // safety: we requested access to the store in `declare_access`, caller is responsible for mut
+        unsafe { &mut *world }.get_store_mut().unwrap()
+    }
+
+    unsafe fn get_entity(store: *mut ComponentStore<T>, entity: EntityId) -> Option<Self> {
+        // safety: we trust `store`
+        unsafe { &*store }.get(entity)
     }
 }
 
-impl<T: Any> QueryParam<T> for &mut T {
-    fn access() -> (AccessType, TypeKey) {
-        (AccessType::Mut, TypeKey::of::<T>())
+impl<T: Any> QueryData for &mut T {
+    type Item = T;
+
+    fn declare_access(meta: &mut SystemMeta) {
+        let id = TypeKey::of::<T>();
+        if meta.component_reads.contains(&id) || meta.component_writes.contains(&id) {
+            panic!(
+                "conflicting component access for {:?} in system {:?}",
+                id, meta.type_id.name
+            );
+        }
+        meta.component_writes.insert(id);
+    }
+
+    unsafe fn get_store(world: *mut World) -> *mut ComponentStore<T> {
+        // safety: we requested access to the store in `declare_access`, caller is responsible for mut
+        unsafe { &mut *world }.get_store_mut().unwrap()
+    }
+
+    unsafe fn get_entity(store: *mut ComponentStore<T>, entity: EntityId) -> Option<Self> {
+        // safety: we trust `store`
+        unsafe { &mut *store }.get_mut(entity)
     }
 }
