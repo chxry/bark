@@ -1,8 +1,9 @@
 use crate::TypeKey;
 use std::any::{self, Any};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::iter::Peekable;
 use std::marker::PhantomData;
-use std::{ops, ptr, slice};
+use std::{ops, ptr};
 use tracing::{debug, trace};
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
@@ -373,7 +374,9 @@ macro_rules! impl_system {
             unsafe fn run(&mut self, world: *mut World) {
                 // safety: responsibility is on the caller
                 unsafe {
-                    $(let $P = $P::fetch(world);)*
+                    $(
+                        let $P = $P::fetch(world);
+                    )*
                     trace!("run system {:?}", self.meta.type_id.name);
                     (self.f)($($P),*);
                 }
@@ -384,7 +387,9 @@ macro_rules! impl_system {
             fn into_system(self) -> Box<dyn System> {
                 #[allow(unused_mut)]
                 let mut meta = SystemMeta::new(TypeKey::of::<F>());
-                $($P::declare_access(&mut meta);)*
+                $(
+                    $P::declare_access(&mut meta);
+                )*
                 Box::new(SystemStorage {
                     f: self,
                     meta,
@@ -466,25 +471,24 @@ pub struct Query<P> {
 }
 
 pub trait QueryData: Sized {
-    type Item;
+    // type Item;
     fn declare_access(meta: &mut SystemMeta);
     /// safety: must only be used according to `declare_access`
-    unsafe fn get_store(world: *mut World) -> *mut ComponentStore<Self::Item>;
-    /// safety: `store` must be valid
-    unsafe fn get_entity(store: *mut ComponentStore<Self::Item>, entity: EntityId) -> Option<Self>;
+    unsafe fn get_iter(world: *mut World) -> impl Iterator<Item = (EntityId, Self)>;
 }
 
-pub struct QueryIter<'w, S, P> {
-    entities: slice::Iter<'w, EntityId>,
-    stores: S,
+pub struct QueryIter<S, P> {
+    iters: S,
     params: PhantomData<P>,
 }
 
 macro_rules! impl_query {
-    ($(($n:tt, $P:ident)),*) => {
+    ($(($n:tt, $P:ident, $I:ident)),*) => {
         impl<'w, $($P: QueryData),*> SystemParam<'w> for Query<($($P,)*)> {
             fn declare_access(meta: &mut SystemMeta)  {
-                $($P::declare_access(meta);)*
+                $(
+                    $P::declare_access(meta);
+                )*
             }
 
             unsafe fn fetch(world: *mut World) -> Self {
@@ -496,41 +500,55 @@ macro_rules! impl_query {
         }
 
         impl<$($P: QueryData),*> Query<($($P,)*)> {
-            pub fn iter(&mut self) -> QueryIter<'_, ($(*mut ComponentStore<$P::Item>,)*), ($($P,)*)> {
-                // safety: `declare_access` lets us safely call .entities(), &mut gives `QueryIter` exclusive access
+            pub fn iter(&mut self) -> QueryIter<($(Peekable<impl Iterator<Item = (EntityId, $P)>>,)*), ($($P,)*)> {
+                // safety: &mut gives `QueryIter` exclusive access over what we requested in `declare_access`
                 unsafe {
                     QueryIter {
-                        entities: [$((*$P::get_store(self.world)).entities(),)*].iter().min_by_key(|x| x.len()).unwrap().iter(),
-                        stores: ($($P::get_store(self.world),)*),
+                        iters: ($($P::get_iter(self.world).peekable(),)*),
                         params: PhantomData
                     }
                 }
             }
         }
 
-        impl<$($P: QueryData),*> Iterator for QueryIter<'_, ($(*mut ComponentStore<$P::Item>,)*), ($($P,)*)> {
+        impl<$($I: Iterator<Item=(EntityId, $P)>),*, $($P: QueryData),*> Iterator for QueryIter<($(Peekable<$I>,)*), ($($P,)*)> {
             type Item = ($($P,)*);
 
+            #[allow(unused_assignments)]
             fn next(&mut self) -> Option<Self::Item> {
                 loop {
-                    let id = self.entities.next()?;
-                    // safety: `Query` requested this in `declare_access`
-                    unsafe {
-                        match ($($P::get_entity(self.stores.$n, *id),)*) {
-                            ($(Some($P),)*) => return Some(($($P,)*)),
-                            _ => continue,
-                        }
+                    $(
+                        let $P = self.iters.$n.peek()?;
+                    )*
+                    let mut max = *[$($P.0),*].iter().max().unwrap();
+
+                    if $($P.0 == max)&&* {
+                        return Some(($(self.iters.$n.next().unwrap().1,)*));
                     }
+
+                    $(
+                        // todo: advance using `partiton_point`?
+                        loop {
+                            match self.iters.$n.peek() {
+                                None => return None,
+                                Some(&(e, _)) if e >= max => {
+                                    max = e;
+                                    break;
+                                },
+                                _ => { self.iters.$n.next(); }
+                            }
+                        }
+                    )*
                 }
             }
         }
     };
 }
 
-variadics_please::all_tuples_enumerated!(impl_query, 1, 16, P);
+variadics_please::all_tuples_enumerated!(impl_query, 1, 16, P, I);
 
 impl<T: Any> QueryData for &T {
-    type Item = T;
+    // type Item = T;
 
     fn declare_access(meta: &mut SystemMeta) {
         let id = TypeKey::of::<T>();
@@ -543,19 +561,14 @@ impl<T: Any> QueryData for &T {
         meta.component_access.insert(id, Access::Read);
     }
 
-    unsafe fn get_store(world: *mut World) -> *mut ComponentStore<T> {
-        // safety: we requested access to the store in `declare_access`, caller is responsible for mut
-        unsafe { &mut *world }.get_store_mut().unwrap()
-    }
-
-    unsafe fn get_entity(store: *mut ComponentStore<T>, entity: EntityId) -> Option<Self> {
-        // safety: we trust `store`
-        unsafe { &*store }.get(entity)
+    unsafe fn get_iter(world: *mut World) -> impl Iterator<Item = (EntityId, Self)> {
+        // safety: we requested this in `declare_access`
+        unsafe { (*world).get_store() }.unwrap().iter()
     }
 }
 
 impl<T: Any> QueryData for &mut T {
-    type Item = T;
+    // type Item = T;
 
     fn declare_access(meta: &mut SystemMeta) {
         let id = TypeKey::of::<T>();
@@ -568,13 +581,9 @@ impl<T: Any> QueryData for &mut T {
         meta.component_access.insert(id, Access::Write);
     }
 
-    unsafe fn get_store(world: *mut World) -> *mut ComponentStore<T> {
-        // safety: we requested access to the store in `declare_access`, caller is responsible for mut
-        unsafe { &mut *world }.get_store_mut().unwrap()
-    }
-
-    unsafe fn get_entity(store: *mut ComponentStore<T>, entity: EntityId) -> Option<Self> {
-        // safety: we trust `store`
-        unsafe { &mut *store }.get_mut(entity)
+    unsafe fn get_iter(world: *mut World) -> impl Iterator<Item = (EntityId, Self)> {
+        // safety: we requested this in `declare_access`
+        // todo: we hand out this iterator with no lifetimes linking it to the World! probably scary
+        unsafe { (*world).get_store_mut() }.unwrap().iter_mut()
     }
 }
