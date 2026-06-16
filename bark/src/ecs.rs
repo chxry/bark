@@ -44,7 +44,6 @@ impl World {
             .downcast_mut()
     }
 
-    // todo: maybe consider removing
     pub fn create_store<T: Any>(&mut self) -> &mut ComponentStore<T> {
         self.component_stores
             .entry(TypeKey::of::<T>())
@@ -53,11 +52,11 @@ impl World {
             .unwrap()
     }
 
-    pub fn insert_resource<T: Any>(&mut self, res: T) {
+    pub fn insert_resource<T: Any>(&mut self, data: T) {
         let id = TypeKey::of::<T>();
         debug!("insert resource {:?}", id);
 
-        self.resources.insert(id, Box::new(res));
+        self.resources.insert(id, Box::new(data));
     }
 
     pub fn get_resource<T: Any>(&self) -> Option<&T> {
@@ -102,14 +101,14 @@ impl<T> ComponentStore<T> {
         }
     }
 
-    pub fn insert(&mut self, entity: EntityId, value: T) {
+    pub fn insert(&mut self, entity: EntityId, data: T) {
         match self.entities.binary_search(&entity) {
             Ok(i) => {
-                self.data[i] = value;
+                self.data[i] = data;
             }
             Err(i) => {
                 self.entities.insert(i, entity);
-                self.data.insert(i, value);
+                self.data.insert(i, data);
             }
         }
     }
@@ -181,6 +180,9 @@ impl Schedule {
                 unsafe {
                     self.systems[i].run(ptr::from_mut(world));
                 }
+            }
+            for &i in layer {
+                self.systems[i].flush(world);
             }
         }
     }
@@ -264,33 +266,32 @@ pub trait System {
     fn get_meta(&self) -> &SystemMeta;
     fn get_meta_mut(&mut self) -> &mut SystemMeta;
     /// safety: must only be called according to `SystemMeta`
-    /// todo: raw pointers
     unsafe fn run(&mut self, world: *mut World);
+    fn flush(&mut self, world: &mut World);
 }
 
 pub trait IntoSystem<P>: Sized {
     fn into_system(self) -> Box<dyn System>;
 
-    fn before<T: Any>(self, _: T) -> Box<dyn System> {
+    fn before<S: Any>(self, _: S) -> Box<dyn System> {
         let mut sys = self.into_system();
         let meta = sys.get_meta_mut();
         if let Some(Ordering::After) = meta
             .constraints
-            .insert(TypeKey::of::<T>(), Ordering::Before)
+            .insert(TypeKey::of::<S>(), Ordering::Before)
         {
             panic!("conflicting ordering constraint for {:?}", meta.type_id);
         }
         sys
     }
 
-    fn after<T: Any>(self, _: T) -> Box<dyn System> {
+    fn after<S: Any>(self, _: S) -> Box<dyn System> {
         let mut sys = self.into_system();
         let meta = sys.get_meta_mut();
-        if let Some(Ordering::Before) = meta.constraints.insert(TypeKey::of::<T>(), Ordering::After)
+        if let Some(Ordering::Before) = meta.constraints.insert(TypeKey::of::<S>(), Ordering::After)
         {
             panic!("conflicting ordering constraint for {:?}", meta.type_id);
         }
-
         sys
     }
 }
@@ -316,8 +317,8 @@ enum Access {
 }
 
 impl Access {
-    fn conflicts(&self, other: Self) -> bool {
-        *self != Access::Read || other != Access::Read
+    fn conflicts(self, other: Self) -> bool {
+        self != Access::Read || other != Access::Read
     }
 }
 
@@ -352,21 +353,26 @@ impl SystemMeta {
     }
 }
 
-struct SystemStorage<F, P> {
+struct SystemStorage<F, S, P> {
     f: F,
     meta: SystemMeta,
+    state: S,
     params: PhantomData<P>,
 }
 
-trait SystemParam<'w>: Sized {
-    fn declare_access(meta: &mut SystemMeta);
-    /// safety: must only be called according to `declare_access`
-    unsafe fn fetch(world: *mut World) -> Self;
+trait SystemParam: Sized {
+    type State;
+
+    fn init(meta: &mut SystemMeta) -> Self::State;
+    /// safety: must only be called according to `init`
+    /// todo: whatever the `SystemParam`s do with these pointers can leak. safety is guaranteed during the system, however users of `SystemParam` and descendents are currently trusted to not do anything silly
+    unsafe fn fetch(world: *mut World, state: *mut Self::State) -> Self;
+    fn flush(_: &mut World, _: &mut Self::State) {}
 }
 
 macro_rules! impl_system {
-    ($($P:ident),*) => {
-        impl<'w, F: Fn($($P),*) + Any, $($P: SystemParam<'w> + Any),*> System for SystemStorage<F, ($($P,)*)> {
+    ($(($n:tt, $P:ident)),*) => {
+        impl<F: Fn($($P),*) + Any, $($P: SystemParam + Any),*> System for SystemStorage<F, ($($P::State,)*), ($($P,)*)> {
             fn get_meta(&self) -> &SystemMeta { &self.meta }
             fn get_meta_mut(&mut self) -> &mut SystemMeta { &mut self.meta }
 
@@ -375,37 +381,45 @@ macro_rules! impl_system {
                 // safety: responsibility is on the caller
                 unsafe {
                     $(
-                        let $P = $P::fetch(world);
+                        let $P = $P::fetch(world, ptr::from_mut(&mut self.state.$n));
                     )*
                     trace!("run system {:?}", self.meta.type_id.name);
                     (self.f)($($P),*);
                 }
             }
+
+            #[allow(unused)]
+            fn flush(&mut self, world: &mut World) {
+                $(
+                    let $P = $P::flush(world, &mut self.state.$n);
+                )*
+            }
         }
 
-        impl<'w, F: Fn($($P),*) + Any, $($P: SystemParam<'w> + Any),*> IntoSystem<($($P,)*)> for F {
+        impl<F: Fn($($P),*) + Any, $($P: SystemParam + Any),*> IntoSystem<($($P,)*)> for F {
             fn into_system(self) -> Box<dyn System> {
                 #[allow(unused_mut)]
                 let mut meta = SystemMeta::new(TypeKey::of::<F>());
-                $(
-                    $P::declare_access(&mut meta);
-                )*
+                let state = ($($P::init(&mut meta),)*);
                 Box::new(SystemStorage {
                     f: self,
                     meta,
-                    params: PhantomData,
+                    state,
+                    params: PhantomData
                 })
             }
         }
     }
 }
 
-variadics_please::all_tuples!(impl_system, 0, 16, P);
+variadics_please::all_tuples_enumerated!(impl_system, 0, 16, P);
 
 pub struct Res<'w, T>(&'w T);
 
-impl<'w, T: Any> SystemParam<'w> for Res<'w, T> {
-    fn declare_access(meta: &mut SystemMeta) {
+impl<T: Any> SystemParam for Res<'_, T> {
+    type State = ();
+
+    fn init(meta: &mut SystemMeta) {
         let id = TypeKey::of::<T>();
         if let Some(Access::Write) = meta.resource_access.get(&id) {
             panic!(
@@ -416,8 +430,8 @@ impl<'w, T: Any> SystemParam<'w> for Res<'w, T> {
         meta.resource_access.insert(id, Access::Read);
     }
 
-    unsafe fn fetch(world: *mut World) -> Self {
-        // safety: we requested this in declare_access
+    unsafe fn fetch(world: *mut World, _: *mut Self::State) -> Self {
+        // safety: we requested this in `init`
         Self(unsafe { (*world).get_resource() }.unwrap())
     }
 }
@@ -432,8 +446,10 @@ impl<T> ops::Deref for Res<'_, T> {
 
 pub struct ResMut<'w, T>(&'w mut T);
 
-impl<'w, T: Any> SystemParam<'w> for ResMut<'w, T> {
-    fn declare_access(meta: &mut SystemMeta) {
+impl<T: Any> SystemParam for ResMut<'_, T> {
+    type State = ();
+
+    fn init(meta: &mut SystemMeta) {
         let id = TypeKey::of::<T>();
         if meta.resource_access.contains_key(&id) {
             panic!(
@@ -444,8 +460,8 @@ impl<'w, T: Any> SystemParam<'w> for ResMut<'w, T> {
         meta.resource_access.insert(id, Access::Write);
     }
 
-    unsafe fn fetch(world: *mut World) -> Self {
-        // safety: we requested this in declare_access
+    unsafe fn fetch(world: *mut World, _: *mut Self::State) -> Self {
+        // safety: we requested this in `init`
         Self(unsafe { (*world).get_resource_mut() }.unwrap())
     }
 }
@@ -465,15 +481,14 @@ impl<T> ops::DerefMut for ResMut<'_, T> {
 }
 
 pub struct Query<P> {
-    // todo: this is an idea?
     world: *mut World,
     params: PhantomData<P>,
 }
 
 pub trait QueryData: Sized {
-    // type Item;
     fn declare_access(meta: &mut SystemMeta);
     /// safety: must only be used according to `declare_access`
+    /// todo: we hand out this iterator with no lifetimes linking it to the World! probably scary
     unsafe fn get_iter(world: *mut World) -> impl Iterator<Item = (EntityId, Self)>;
 }
 
@@ -484,14 +499,16 @@ pub struct QueryIter<S, P> {
 
 macro_rules! impl_query {
     ($(($n:tt, $P:ident, $I:ident)),*) => {
-        impl<'w, $($P: QueryData),*> SystemParam<'w> for Query<($($P,)*)> {
-            fn declare_access(meta: &mut SystemMeta)  {
+        impl<$($P: QueryData),*> SystemParam for Query<($($P,)*)> {
+            type State = ();
+
+            fn init(meta: &mut SystemMeta)  {
                 $(
                     $P::declare_access(meta);
                 )*
             }
 
-            unsafe fn fetch(world: *mut World) -> Self {
+            unsafe fn fetch(world: *mut World,  _: *mut Self::State) -> Self {
                 Self {
                     world,
                     params: PhantomData
@@ -546,8 +563,6 @@ macro_rules! impl_query {
 variadics_please::all_tuples_enumerated!(impl_query, 1, 16, P, I);
 
 impl<T: Any> QueryData for &T {
-    // type Item = T;
-
     fn declare_access(meta: &mut SystemMeta) {
         let id = TypeKey::of::<T>();
         if let Some(Access::Write) = meta.component_access.get(&id) {
@@ -566,8 +581,6 @@ impl<T: Any> QueryData for &T {
 }
 
 impl<T: Any> QueryData for &mut T {
-    // type Item = T;
-
     fn declare_access(meta: &mut SystemMeta) {
         let id = TypeKey::of::<T>();
         if meta.component_access.contains_key(&id) {
@@ -581,7 +594,104 @@ impl<T: Any> QueryData for &mut T {
 
     unsafe fn get_iter(world: *mut World) -> impl Iterator<Item = (EntityId, Self)> {
         // safety: we requested this in `declare_access`
-        // todo: we hand out this iterator with no lifetimes linking it to the World! probably scary
         unsafe { (*world).get_store_mut() }.unwrap().iter_mut()
+    }
+}
+
+pub struct Commands<'w>(&'w mut CommandBuffer);
+
+impl Commands<'_> {
+    pub fn spawn(&mut self) -> EntityCommands<'_> {
+        self.0.entity_id.0 += 1;
+        self.0.commands.push(Box::new(SpawnCommand));
+        EntityCommands(self.0, self.0.entity_id)
+    }
+
+    pub fn insert_resource<T: Any>(&mut self, data: T) {
+        self.0
+            .commands
+            .push(Box::new(InsertResourceCommand { data }));
+    }
+}
+
+impl SystemParam for Commands<'_> {
+    type State = CommandBuffer;
+
+    fn init(_: &mut SystemMeta) -> Self::State {
+        CommandBuffer::new()
+    }
+
+    unsafe fn fetch(_: *mut World, state: *mut Self::State) -> Self {
+        // safety: 'w is bs, see trait commment
+        Self(unsafe { &mut *state })
+    }
+
+    fn flush(world: &mut World, state: &mut Self::State) {
+        let entity_offset = world.entity_id;
+        for cmd in state.commands.drain(..) {
+            cmd.apply(world, entity_offset);
+        }
+        state.entity_id = EntityId(0);
+    }
+}
+
+pub struct EntityCommands<'w>(&'w mut CommandBuffer, EntityId);
+
+impl EntityCommands<'_> {
+    pub fn insert<T: Any>(&mut self, data: T) {
+        self.0.commands.push(Box::new(InsertCommand {
+            entity_id: self.1,
+            data,
+        }));
+    }
+}
+
+struct CommandBuffer {
+    entity_id: EntityId,
+    commands: Vec<Box<dyn Command>>,
+}
+
+impl CommandBuffer {
+    fn new() -> Self {
+        Self {
+            entity_id: EntityId(0),
+            commands: vec![],
+        }
+    }
+}
+
+trait Command {
+    fn apply(self: Box<Self>, world: &mut World, entity_offset: EntityId);
+}
+
+struct SpawnCommand;
+
+impl Command for SpawnCommand {
+    fn apply(self: Box<Self>, world: &mut World, _: EntityId) {
+        world.spawn();
+    }
+}
+
+struct InsertCommand<T> {
+    entity_id: EntityId,
+    // todo: optionally dont offset for existing entities
+    data: T,
+}
+
+impl<T: Any> Command for InsertCommand<T> {
+    fn apply(self: Box<Self>, world: &mut World, entity_offset: EntityId) {
+        world
+            .create_store()
+            .insert(EntityId(self.entity_id.0 + entity_offset.0), self.data);
+    }
+}
+
+struct InsertResourceCommand<T> {
+    data: T,
+}
+
+impl<T: Any> Command for InsertResourceCommand<T> {
+    fn apply(self: Box<Self>, world: &mut World, _: EntityId) {
+        world.insert_resource(self.data)
     }
 }
