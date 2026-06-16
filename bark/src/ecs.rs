@@ -55,7 +55,7 @@ impl World {
 
     pub fn insert_resource<T: Any>(&mut self, res: T) {
         let id = TypeKey::of::<T>();
-        trace!("insert resource {:?}", id);
+        debug!("insert resource {:?}", id);
 
         self.resources.insert(id, Box::new(res));
     }
@@ -511,34 +511,32 @@ macro_rules! impl_query {
             }
         }
 
-        impl<$($I: Iterator<Item=(EntityId, $P)>),*, $($P: QueryData),*> Iterator for QueryIter<($(Peekable<$I>,)*), ($($P,)*)> {
+        impl<$($I: Iterator<Item = (EntityId, $P)>),*, $($P: QueryData),*> Iterator for QueryIter<($(Peekable<$I>,)*), ($($P,)*)> {
             type Item = ($($P,)*);
 
             #[allow(unused_assignments)]
             fn next(&mut self) -> Option<Self::Item> {
                 loop {
-                    $(
-                        let $P = self.iters.$n.peek()?;
-                    )*
-                    let mut max = *[$($P.0),*].iter().max().unwrap();
-
-                    if $($P.0 == max)&&* {
-                        return Some(($(self.iters.$n.next().unwrap().1,)*));
-                    }
-
+                    let mut max = *[$(self.iters.$n.peek()?.0),*].iter().max().unwrap();
+                    let mut matched = true;
                     $(
                         // todo: advance using `partiton_point`?
                         loop {
-                            match self.iters.$n.peek() {
-                                None => return None,
-                                Some(&(e, _)) if e >= max => {
+                            match self.iters.$n.peek()? {
+                                &(e, _) if e >= max => {
                                     max = e;
                                     break;
                                 },
-                                _ => { self.iters.$n.next(); }
+                                _ => {
+                                    self.iters.$n.next();
+                                    matched = false;
+                                }
                             }
                         }
                     )*
+                    if matched {
+                        break Some(($(self.iters.$n.next().unwrap().1,)*));
+                    }
                 }
             }
         }
