@@ -3,6 +3,7 @@ use std::any::{self, Any};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::iter::Peekable;
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{ops, ptr};
 use tracing::{debug, trace};
 
@@ -10,7 +11,7 @@ use tracing::{debug, trace};
 pub struct EntityId(u64);
 
 pub struct World {
-    entity_id: EntityId,
+    entity_id: AtomicU64,
     component_stores: HashMap<TypeKey, Box<dyn Any>>,
     resources: HashMap<TypeKey, Box<dyn Any>>,
     schedules: HashMap<TypeKey, Schedule>,
@@ -19,17 +20,17 @@ pub struct World {
 impl World {
     pub fn new() -> Self {
         Self {
-            entity_id: EntityId(0),
+            entity_id: AtomicU64::new(0),
             component_stores: HashMap::new(),
             resources: HashMap::new(),
             schedules: HashMap::new(),
         }
     }
 
-    pub fn spawn(&mut self) -> EntityId {
-        self.entity_id.0 += 1;
-        trace!("spawn entity {:?}", self.entity_id);
-        self.entity_id
+    pub fn spawn(&self) -> EntityId {
+        let id = self.entity_id.fetch_add(1, Ordering::Relaxed);
+        trace!("spawn entity {:?}", id);
+        EntityId(id)
     }
 
     pub fn get_store<T: Any>(&self) -> Option<&ComponentStore<T>> {
@@ -181,6 +182,7 @@ impl Schedule {
                     self.systems[i].run(ptr::from_mut(world));
                 }
             }
+            // todo: potentially move flushing to after all layers are complete?
             for &i in layer {
                 self.systems[i].flush(world);
             }
@@ -204,10 +206,10 @@ impl Schedule {
             for (id, ordering) in &meta.constraints {
                 if let Some(&j) = id_to_idx.get(id) {
                     match ordering {
-                        Ordering::Before => {
+                        SystemOrder::Before => {
                             edges.insert((i, j));
                         }
-                        Ordering::After => {
+                        SystemOrder::After => {
                             edges.insert((j, i));
                         }
                     }
@@ -276,9 +278,9 @@ pub trait IntoSystem<P>: Sized {
     fn before<S: Any>(self, _: S) -> Box<dyn System> {
         let mut sys = self.into_system();
         let meta = sys.get_meta_mut();
-        if let Some(Ordering::After) = meta
+        if let Some(SystemOrder::After) = meta
             .constraints
-            .insert(TypeKey::of::<S>(), Ordering::Before)
+            .insert(TypeKey::of::<S>(), SystemOrder::Before)
         {
             panic!("conflicting ordering constraint for {:?}", meta.type_id);
         }
@@ -288,7 +290,9 @@ pub trait IntoSystem<P>: Sized {
     fn after<S: Any>(self, _: S) -> Box<dyn System> {
         let mut sys = self.into_system();
         let meta = sys.get_meta_mut();
-        if let Some(Ordering::Before) = meta.constraints.insert(TypeKey::of::<S>(), Ordering::After)
+        if let Some(SystemOrder::Before) = meta
+            .constraints
+            .insert(TypeKey::of::<S>(), SystemOrder::After)
         {
             panic!("conflicting ordering constraint for {:?}", meta.type_id);
         }
@@ -307,7 +311,7 @@ pub struct SystemMeta {
     type_id: TypeKey,
     component_access: HashMap<TypeKey, Access>,
     resource_access: HashMap<TypeKey, Access>,
-    constraints: HashMap<TypeKey, Ordering>,
+    constraints: HashMap<TypeKey, SystemOrder>,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -323,7 +327,7 @@ impl Access {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
-enum Ordering {
+enum SystemOrder {
     Before,
     After,
 }
@@ -598,19 +602,17 @@ impl<T: Any> QueryData for &mut T {
     }
 }
 
-pub struct Commands<'w>(&'w mut CommandBuffer);
+type CommandBuffer = Vec<Box<dyn Command>>;
+
+pub struct Commands<'w>(&'w World, &'w mut CommandBuffer);
 
 impl Commands<'_> {
     pub fn spawn(&mut self) -> EntityCommands<'_> {
-        self.0.entity_id.0 += 1;
-        self.0.commands.push(Box::new(SpawnCommand));
-        EntityCommands(self.0, self.0.entity_id)
+        EntityCommands(self.1, self.0.spawn())
     }
 
     pub fn insert_resource<T: Any>(&mut self, data: T) {
-        self.0
-            .commands
-            .push(Box::new(InsertResourceCommand { data }));
+        self.1.push(Box::new(InsertResourceCommand(data)));
     }
 }
 
@@ -621,17 +623,15 @@ impl SystemParam for Commands<'_> {
         CommandBuffer::new()
     }
 
-    unsafe fn fetch(_: *mut World, state: *mut Self::State) -> Self {
-        // safety: 'w is bs, see trait commment
-        Self(unsafe { &mut *state })
+    unsafe fn fetch(world: *mut World, state: *mut Self::State) -> Self {
+        // safety: 'w is bs, see trait commment. we only use `World.entity_id`
+        unsafe { Self(&mut *world, &mut *state) }
     }
 
     fn flush(world: &mut World, state: &mut Self::State) {
-        let entity_offset = world.entity_id;
-        for cmd in state.commands.drain(..) {
-            cmd.apply(world, entity_offset);
+        for cmd in state.drain(..) {
+            cmd.apply(world);
         }
-        state.entity_id = EntityId(0);
     }
 }
 
@@ -639,59 +639,26 @@ pub struct EntityCommands<'w>(&'w mut CommandBuffer, EntityId);
 
 impl EntityCommands<'_> {
     pub fn insert<T: Any>(&mut self, data: T) {
-        self.0.commands.push(Box::new(InsertCommand {
-            entity_id: self.1,
-            data,
-        }));
-    }
-}
-
-struct CommandBuffer {
-    entity_id: EntityId,
-    commands: Vec<Box<dyn Command>>,
-}
-
-impl CommandBuffer {
-    fn new() -> Self {
-        Self {
-            entity_id: EntityId(0),
-            commands: vec![],
-        }
+        self.0.push(Box::new(InsertCommand(data, self.1)));
     }
 }
 
 trait Command {
-    fn apply(self: Box<Self>, world: &mut World, entity_offset: EntityId);
+    fn apply(self: Box<Self>, world: &mut World);
 }
 
-struct SpawnCommand;
-
-impl Command for SpawnCommand {
-    fn apply(self: Box<Self>, world: &mut World, _: EntityId) {
-        world.spawn();
-    }
-}
-
-struct InsertCommand<T> {
-    entity_id: EntityId,
-    // todo: optionally dont offset for existing entities
-    data: T,
-}
+struct InsertCommand<T>(T, EntityId);
 
 impl<T: Any> Command for InsertCommand<T> {
-    fn apply(self: Box<Self>, world: &mut World, entity_offset: EntityId) {
-        world
-            .create_store()
-            .insert(EntityId(self.entity_id.0 + entity_offset.0), self.data);
+    fn apply(self: Box<Self>, world: &mut World) {
+        world.create_store().insert(self.1, self.0);
     }
 }
 
-struct InsertResourceCommand<T> {
-    data: T,
-}
+struct InsertResourceCommand<T>(T);
 
 impl<T: Any> Command for InsertResourceCommand<T> {
-    fn apply(self: Box<Self>, world: &mut World, _: EntityId) {
-        world.insert_resource(self.data)
+    fn apply(self: Box<Self>, world: &mut World) {
+        world.insert_resource(self.0)
     }
 }
