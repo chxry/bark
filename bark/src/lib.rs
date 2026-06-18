@@ -1,31 +1,13 @@
+pub mod app;
 pub mod assets;
 pub mod ecs;
+pub mod gfx;
 
-use crate::ecs::World;
 use std::any::{self, Any, TypeId};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-pub mod phase {
-    pub struct Startup;
-    pub struct Update;
-}
-
-pub struct App {
-    pub world: World,
-}
-
-impl App {
-    pub fn new() -> Self {
-        Self {
-            world: World::new(),
-        }
-    }
-
-    pub fn run(mut self) {
-        self.world.run_schedule(phase::Startup);
-    }
-}
+pub use app::App;
 
 #[derive(Eq, Copy, Clone)]
 pub struct TypeKey {

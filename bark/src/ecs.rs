@@ -91,7 +91,7 @@ impl World {
 
     pub fn run_schedule<T: Any>(&mut self, _: T) {
         let id = TypeKey::of::<T>();
-        debug!("run phase {:?}", id);
+        trace!("run phase {:?}", id);
         if let Some(mut schedule) = self.schedules.remove(&id) {
             schedule.run(self);
             // todo this is kinda weird
@@ -623,8 +623,8 @@ macro_rules! impl_query {
 
             #[allow(unused_assignments)]
             fn next(&mut self) -> Option<Self::Item> {
+                let mut max = *[$(self.iters.$n.peek()?.0),*].iter().max().unwrap();
                 loop {
-                    let mut max = *[$(self.iters.$n.peek()?.0),*].iter().max().unwrap();
                     let mut matched = true;
                     $(
                         // todo: advance using `partiton_point`?

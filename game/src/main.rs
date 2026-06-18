@@ -1,6 +1,7 @@
-use bark::ecs::{Commands, Events, IntoSystem, Query, Res, ResMut};
-use bark::phase;
-use tracing::info;
+use bark::app::{self, ResizeEvent};
+use bark::ecs::{Commands, Events, Query};
+use bark::gfx;
+use tracing::{info, trace};
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -11,44 +12,20 @@ fn main() {
         .init();
 
     let mut app = bark::App::new();
+    gfx::init(&mut app);
+    app.world.insert_system(app::Startup, spawn);
+    // app.world.insert_system(app::Update, physics);
+    // app.world.insert_system(app::Update, cull.after(physics));
+    app.world.insert_system(app::Update, read_events);
 
-    app.world.insert_system(phase::Startup, startup);
-    app.world.insert_system(phase::Update, increment);
-    app.world.insert_system(phase::Update, physics);
-    app.world.insert_system(phase::Update, test.after(physics));
-    app.world.insert_system(phase::Update, cull.after(physics));
-    app.world
-        .insert_system(phase::Update, read_events.after(increment));
-
-    app.world.run_schedule(phase::Startup);
-    for _ in 0..100 {
-        app.world.clear_events();
-        app.world.run_schedule(phase::Update);
-    }
+    app.run();
 }
 
-struct Frame(u64);
 struct Position(u32, u32, u32);
 struct Velocity(u32, u32, u32);
-struct Marker;
-struct TestEvent(u64);
 
-fn startup(mut commands: Commands) {
-    commands.insert_resource(Frame(0));
-    for i in 0..1000 {
-        let mut test = commands.spawn();
-        test.insert(Position(i, i, i));
-        test.insert(Velocity(i, i, i));
-        if i % 500 == 0 {
-            test.insert(Marker);
-        }
-    }
-}
-
-fn increment(mut frame: ResMut<Frame>, mut commands: Commands) {
-    frame.0 += 1;
-    commands.queue_event(TestEvent(frame.0));
-    for i in 0..1000 {
+fn spawn(mut commands: Commands) {
+    for i in 0..10000 {
         let mut test = commands.spawn();
         test.insert(Position(i, i, i));
         test.insert(Velocity(i, i, i));
@@ -63,15 +40,7 @@ fn physics(mut query: Query<(&mut Position, &Velocity)>) {
         position.2 += velocity.2;
         n += 1;
     }
-    info!("physics n={}", n);
-}
-
-fn test(mut query: Query<(&Marker, &mut Velocity)>) {
-    for (_, (_, velocity)) in query.iter() {
-        velocity.0 /= 2;
-        velocity.1 /= 2;
-        velocity.2 /= 2;
-    }
+    trace!("physics n={}", n);
 }
 
 fn cull(mut query: Query<(&Position,)>, mut commands: Commands) {
@@ -85,8 +54,8 @@ fn cull(mut query: Query<(&Position,)>, mut commands: Commands) {
     info!("cull n={}", n);
 }
 
-fn read_events(frame: Res<Frame>, events: Events<TestEvent>) {
-    for e in events.iter() {
-        info!("frame {}: receive event {}", frame.0, e.0);
+fn read_events(events: Events<ResizeEvent>) {
+    if let Some(event) = events.iter().last() {
+        info!("resized! width={} height={}", event.width, event.height);
     }
 }
