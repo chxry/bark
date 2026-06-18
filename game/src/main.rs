@@ -1,4 +1,4 @@
-use bark::ecs::{Commands, IntoSystem, Query, ResMut};
+use bark::ecs::{Commands, Events, IntoSystem, Query, Res, ResMut};
 use bark::phase;
 use tracing_subscriber::EnvFilter;
 
@@ -15,9 +15,12 @@ fn main() {
     app.world.insert_system(phase::Update, increment);
     app.world.insert_system(phase::Update, physics);
     app.world.insert_system(phase::Update, test.after(physics));
+    app.world
+        .insert_system(phase::Update, read_events.after(increment));
 
     app.world.run_schedule(phase::Startup);
     for _ in 0..10 {
+        app.world.clear_events();
         app.world.run_schedule(phase::Update);
     }
 }
@@ -26,6 +29,7 @@ struct Frame(u64);
 struct Position(u32, u32, u32);
 struct Velocity(u32, u32, u32);
 struct Marker;
+struct TestEvent(u64);
 
 fn startup(mut commands: Commands) {
     commands.insert_resource(Frame(0));
@@ -41,6 +45,7 @@ fn startup(mut commands: Commands) {
 
 fn increment(mut frame: ResMut<Frame>, mut commands: Commands) {
     frame.0 += 1;
+    commands.queue_event(TestEvent(frame.0));
     for i in 0..100 {
         let mut test = commands.spawn();
         test.insert(Position(i, i, i));
@@ -61,5 +66,11 @@ fn test(mut query: Query<(&Marker, &mut Velocity)>) {
         velocity.0 /= 2;
         velocity.1 /= 2;
         velocity.2 /= 2;
+    }
+}
+
+fn read_events(frame: Res<Frame>, events: Events<TestEvent>) {
+    for e in events.iter() {
+        tracing::info!("frame {}: receive event {}", frame.0, e.0);
     }
 }

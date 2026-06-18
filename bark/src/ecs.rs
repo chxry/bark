@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::iter::Peekable;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::{ops, ptr};
+use std::{mem, ops, ptr, slice};
 use tracing::{debug, trace};
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
@@ -13,6 +13,7 @@ pub struct EntityId(u64);
 pub struct World {
     entity_id: AtomicU64,
     component_stores: HashMap<TypeKey, Box<dyn Any>>,
+    event_stores: HashMap<TypeKey, Box<dyn ErasedEventStore>>,
     resources: HashMap<TypeKey, Box<dyn Any>>,
     schedules: HashMap<TypeKey, Schedule>,
 }
@@ -22,6 +23,7 @@ impl World {
         Self {
             entity_id: AtomicU64::new(0),
             component_stores: HashMap::new(),
+            event_stores: HashMap::new(),
             resources: HashMap::new(),
             schedules: HashMap::new(),
         }
@@ -33,22 +35,40 @@ impl World {
         EntityId(id)
     }
 
-    pub fn get_store<T: Any>(&self) -> Option<&ComponentStore<T>> {
+    pub fn get_component_store<T: Any>(&self) -> Option<&ComponentStore<T>> {
         self.component_stores
             .get(&TypeKey::of::<T>())?
             .downcast_ref()
     }
 
-    pub fn get_store_mut<T: Any>(&mut self) -> Option<&mut ComponentStore<T>> {
+    pub fn get_component_store_mut<T: Any>(&mut self) -> Option<&mut ComponentStore<T>> {
         self.component_stores
             .get_mut(&TypeKey::of::<T>())?
             .downcast_mut()
     }
 
-    pub fn create_store<T: Any>(&mut self) -> &mut ComponentStore<T> {
+    pub fn create_component_store<T: Any>(&mut self) -> &mut ComponentStore<T> {
         self.component_stores
             .entry(TypeKey::of::<T>())
             .or_insert_with(|| Box::new(ComponentStore::<T>::new()))
+            .downcast_mut()
+            .unwrap()
+    }
+
+    pub fn get_event_store<T: Any>(&self) -> Option<&EventStore<T>> {
+        (self.event_stores.get(&TypeKey::of::<T>())?.as_ref() as &dyn Any).downcast_ref()
+    }
+
+    pub fn get_event_store_mut<T: Any>(&mut self) -> Option<&mut EventStore<T>> {
+        (self.event_stores.get_mut(&TypeKey::of::<T>())?.as_mut() as &mut dyn Any).downcast_mut()
+    }
+
+    pub fn create_event_store<T: Any>(&mut self) -> &mut EventStore<T> {
+        (self
+            .event_stores
+            .entry(TypeKey::of::<T>())
+            .or_insert_with(|| Box::new(EventStore::<T>::new()))
+            .as_mut() as &mut dyn Any)
             .downcast_mut()
             .unwrap()
     }
@@ -84,6 +104,16 @@ impl World {
             // todo this is kinda weird
             self.schedules.insert(id, schedule);
         }
+    }
+
+    pub fn clear_events(&mut self) {
+        for store in self.event_stores.values_mut() {
+            store.swap_buffers();
+        }
+    }
+
+    pub fn queue_event<T: Any>(&mut self, event: T) {
+        self.create_event_store::<T>().queue(event);
     }
 }
 
@@ -148,6 +178,40 @@ impl<T> ComponentStore<T> {
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (EntityId, &mut T)> {
         self.entities.iter().copied().zip(self.data.iter_mut())
+    }
+}
+
+trait ErasedEventStore: Any {
+    fn swap_buffers(&mut self);
+}
+
+pub struct EventStore<T> {
+    current: Vec<T>,
+    queued: Vec<T>,
+}
+
+impl<T> EventStore<T> {
+    fn new() -> Self {
+        debug!("new event type {:?}", any::type_name::<T>());
+        Self {
+            current: vec![],
+            queued: vec![],
+        }
+    }
+
+    fn queue(&mut self, event: T) {
+        self.queued.push(event);
+    }
+
+    fn current(&self) -> &[T] {
+        &self.current
+    }
+}
+
+impl<T: Any> ErasedEventStore for EventStore<T> {
+    fn swap_buffers(&mut self) {
+        self.current.clear();
+        mem::swap(&mut self.current, &mut self.queued);
     }
 }
 
@@ -580,7 +644,7 @@ impl<T: Any> QueryData for &T {
 
     unsafe fn get_iter(world: *mut World) -> impl Iterator<Item = (EntityId, Self)> {
         // safety: we requested this in `declare_access`
-        unsafe { (*world).get_store() }.unwrap().iter()
+        unsafe { (*world).get_component_store() }.unwrap().iter()
     }
 }
 
@@ -598,7 +662,9 @@ impl<T: Any> QueryData for &mut T {
 
     unsafe fn get_iter(world: *mut World) -> impl Iterator<Item = (EntityId, Self)> {
         // safety: we requested this in `declare_access`
-        unsafe { (*world).get_store_mut() }.unwrap().iter_mut()
+        unsafe { (*world).get_component_store_mut() }
+            .unwrap()
+            .iter_mut()
     }
 }
 
@@ -614,6 +680,10 @@ impl Commands<'_> {
     pub fn insert_resource<T: Any>(&mut self, data: T) {
         self.1.push(Box::new(InsertResourceCommand(data)));
     }
+
+    pub fn queue_event<T: Any>(&mut self, event: T) {
+        self.1.push(Box::new(QueueEventCommand(event)));
+    }
 }
 
 impl SystemParam for Commands<'_> {
@@ -625,7 +695,7 @@ impl SystemParam for Commands<'_> {
 
     unsafe fn fetch(world: *mut World, state: *mut Self::State) -> Self {
         // safety: 'w is bs, see trait commment. we only use `World.entity_id`
-        unsafe { Self(&mut *world, &mut *state) }
+        unsafe { Self(&*world, &mut *state) }
     }
 
     fn flush(world: &mut World, state: &mut Self::State) {
@@ -651,7 +721,7 @@ struct InsertCommand<T>(T, EntityId);
 
 impl<T: Any> Command for InsertCommand<T> {
     fn apply(self: Box<Self>, world: &mut World) {
-        world.create_store().insert(self.1, self.0);
+        world.create_component_store().insert(self.1, self.0);
     }
 }
 
@@ -660,5 +730,32 @@ struct InsertResourceCommand<T>(T);
 impl<T: Any> Command for InsertResourceCommand<T> {
     fn apply(self: Box<Self>, world: &mut World) {
         world.insert_resource(self.0)
+    }
+}
+
+struct QueueEventCommand<T>(T);
+
+impl<T: Any> Command for QueueEventCommand<T> {
+    fn apply(self: Box<Self>, world: &mut World) {
+        world.queue_event(self.0)
+    }
+}
+
+pub struct Events<'w, T>(&'w [T]);
+
+impl<'w, T> Events<'w, T> {
+    pub fn iter(&self) -> slice::Iter<'w, T> {
+        self.0.iter()
+    }
+}
+
+impl<T: Any> SystemParam for Events<'_, T> {
+    type State = ();
+
+    fn init(_: &mut SystemMeta) {}
+
+    unsafe fn fetch(world: *mut World, _: *mut Self::State) -> Self {
+        // safety: event stores are safe to access
+        Self(unsafe { (*world).get_event_store() }.unwrap().current())
     }
 }
