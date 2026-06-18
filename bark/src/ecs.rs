@@ -12,7 +12,7 @@ pub struct EntityId(u64);
 
 pub struct World {
     entity_id: AtomicU64,
-    component_stores: HashMap<TypeKey, Box<dyn Any>>,
+    component_stores: HashMap<TypeKey, Box<dyn ErasedComponentStore>>,
     event_stores: HashMap<TypeKey, Box<dyn ErasedEventStore>>,
     resources: HashMap<TypeKey, Box<dyn Any>>,
     schedules: HashMap<TypeKey, Schedule>,
@@ -29,28 +29,21 @@ impl World {
         }
     }
 
-    pub fn spawn(&self) -> EntityId {
-        let id = self.entity_id.fetch_add(1, Ordering::Relaxed);
-        trace!("spawn entity {:?}", id);
-        EntityId(id)
-    }
-
     pub fn get_component_store<T: Any>(&self) -> Option<&ComponentStore<T>> {
-        self.component_stores
-            .get(&TypeKey::of::<T>())?
-            .downcast_ref()
+        (self.component_stores.get(&TypeKey::of::<T>())?.as_ref() as &dyn Any).downcast_ref()
     }
 
     pub fn get_component_store_mut<T: Any>(&mut self) -> Option<&mut ComponentStore<T>> {
-        self.component_stores
-            .get_mut(&TypeKey::of::<T>())?
+        (self.component_stores.get_mut(&TypeKey::of::<T>())?.as_mut() as &mut dyn Any)
             .downcast_mut()
     }
 
     pub fn create_component_store<T: Any>(&mut self) -> &mut ComponentStore<T> {
-        self.component_stores
+        (self
+            .component_stores
             .entry(TypeKey::of::<T>())
             .or_insert_with(|| Box::new(ComponentStore::<T>::new()))
+            .as_mut() as &mut dyn Any)
             .downcast_mut()
             .unwrap()
     }
@@ -106,6 +99,25 @@ impl World {
         }
     }
 
+    pub fn spawn(&self) -> EntityId {
+        let id = self.entity_id.fetch_add(1, Ordering::Relaxed);
+        EntityId(id)
+    }
+
+    pub fn despawn(&mut self, entity: EntityId) {
+        for store in self.component_stores.values_mut() {
+            store.despawn(entity);
+        }
+    }
+
+    pub fn insert_component<T: Any>(&mut self, entity: EntityId, data: T) {
+        self.create_component_store().insert(entity, data);
+    }
+
+    pub fn remove_component<T: Any>(&mut self, entity: EntityId) -> Option<T> {
+        self.get_component_store_mut()?.remove(entity)
+    }
+
     pub fn clear_events(&mut self) {
         for store in self.event_stores.values_mut() {
             store.swap_buffers();
@@ -115,6 +127,10 @@ impl World {
     pub fn queue_event<T: Any>(&mut self, event: T) {
         self.create_event_store::<T>().queue(event);
     }
+}
+
+trait ErasedComponentStore: Any {
+    fn despawn(&mut self, entity: EntityId);
 }
 
 pub struct ComponentStore<T> {
@@ -178,6 +194,12 @@ impl<T> ComponentStore<T> {
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (EntityId, &mut T)> {
         self.entities.iter().copied().zip(self.data.iter_mut())
+    }
+}
+
+impl<T: Any> ErasedComponentStore for ComponentStore<T> {
+    fn despawn(&mut self, entity: EntityId) {
+        self.remove(entity);
     }
 }
 
@@ -246,10 +268,10 @@ impl Schedule {
                     self.systems[i].run(ptr::from_mut(world));
                 }
             }
-            // todo: potentially move flushing to after all layers are complete?
-            for &i in layer {
-                self.systems[i].flush(world);
-            }
+        }
+        // todo: batch world operations, insertions and removals are costly
+        for sys in &mut self.systems {
+            sys.flush(world);
         }
     }
 
@@ -597,7 +619,7 @@ macro_rules! impl_query {
         }
 
         impl<$($I: Iterator<Item = (EntityId, $P)>),*, $($P: QueryData),*> Iterator for QueryIter<($(Peekable<$I>,)*), ($($P,)*)> {
-            type Item = ($($P,)*);
+            type Item = (EntityId, ($($P,)*));
 
             #[allow(unused_assignments)]
             fn next(&mut self) -> Option<Self::Item> {
@@ -620,7 +642,7 @@ macro_rules! impl_query {
                         }
                     )*
                     if matched {
-                        break Some(($(self.iters.$n.next().unwrap().1,)*));
+                        break Some((max, ($(self.iters.$n.next().unwrap().1,)*)));
                     }
                 }
             }
@@ -677,6 +699,10 @@ impl Commands<'_> {
         EntityCommands(self.1, self.0.spawn())
     }
 
+    pub fn entity(&mut self, entity: EntityId) -> EntityCommands<'_> {
+        EntityCommands(self.1, entity)
+    }
+
     pub fn insert_resource<T: Any>(&mut self, data: T) {
         self.1.push(Box::new(InsertResourceCommand(data)));
     }
@@ -709,7 +735,16 @@ pub struct EntityCommands<'w>(&'w mut CommandBuffer, EntityId);
 
 impl EntityCommands<'_> {
     pub fn insert<T: Any>(&mut self, data: T) {
-        self.0.push(Box::new(InsertCommand(data, self.1)));
+        self.0.push(Box::new(InsertComponentCommand(data, self.1)));
+    }
+
+    pub fn remove<T: Any>(&mut self) {
+        self.0
+            .push(Box::new(RemoveComponentCommand(PhantomData::<T>, self.1)));
+    }
+
+    pub fn despawn(self) {
+        self.0.push(Box::new(DespawnCommand(self.1)));
     }
 }
 
@@ -717,11 +752,27 @@ trait Command {
     fn apply(self: Box<Self>, world: &mut World);
 }
 
-struct InsertCommand<T>(T, EntityId);
+struct InsertComponentCommand<T>(T, EntityId);
 
-impl<T: Any> Command for InsertCommand<T> {
+impl<T: Any> Command for InsertComponentCommand<T> {
     fn apply(self: Box<Self>, world: &mut World) {
-        world.create_component_store().insert(self.1, self.0);
+        world.insert_component(self.1, self.0);
+    }
+}
+
+struct RemoveComponentCommand<T>(PhantomData<T>, EntityId);
+
+impl<T: Any> Command for RemoveComponentCommand<T> {
+    fn apply(self: Box<Self>, world: &mut World) {
+        world.remove_component::<T>(self.1);
+    }
+}
+
+struct DespawnCommand(EntityId);
+
+impl Command for DespawnCommand {
+    fn apply(self: Box<Self>, world: &mut World) {
+        world.despawn(self.0)
     }
 }
 
@@ -741,11 +792,11 @@ impl<T: Any> Command for QueueEventCommand<T> {
     }
 }
 
-pub struct Events<'w, T>(&'w [T]);
+pub struct Events<'w, T>(Option<&'w [T]>);
 
 impl<'w, T> Events<'w, T> {
     pub fn iter(&self) -> slice::Iter<'w, T> {
-        self.0.iter()
+        self.0.unwrap_or(&[]).iter()
     }
 }
 
@@ -756,6 +807,6 @@ impl<T: Any> SystemParam for Events<'_, T> {
 
     unsafe fn fetch(world: *mut World, _: *mut Self::State) -> Self {
         // safety: event stores are safe to access
-        Self(unsafe { (*world).get_event_store() }.unwrap().current())
+        Self(unsafe { (*world).get_event_store() }.map(|x| x.current()))
     }
 }

@@ -1,5 +1,6 @@
 use bark::ecs::{Commands, Events, IntoSystem, Query, Res, ResMut};
 use bark::phase;
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 fn main() {
@@ -15,11 +16,12 @@ fn main() {
     app.world.insert_system(phase::Update, increment);
     app.world.insert_system(phase::Update, physics);
     app.world.insert_system(phase::Update, test.after(physics));
+    app.world.insert_system(phase::Update, cull.after(physics));
     app.world
         .insert_system(phase::Update, read_events.after(increment));
 
     app.world.run_schedule(phase::Startup);
-    for _ in 0..10 {
+    for _ in 0..100 {
         app.world.clear_events();
         app.world.run_schedule(phase::Update);
     }
@@ -46,7 +48,7 @@ fn startup(mut commands: Commands) {
 fn increment(mut frame: ResMut<Frame>, mut commands: Commands) {
     frame.0 += 1;
     commands.queue_event(TestEvent(frame.0));
-    for i in 0..100 {
+    for i in 0..1000 {
         let mut test = commands.spawn();
         test.insert(Position(i, i, i));
         test.insert(Velocity(i, i, i));
@@ -54,23 +56,37 @@ fn increment(mut frame: ResMut<Frame>, mut commands: Commands) {
 }
 
 fn physics(mut query: Query<(&mut Position, &Velocity)>) {
-    for (position, velocity) in query.iter() {
+    let mut n = 0;
+    for (_, (position, velocity)) in query.iter() {
         position.0 += velocity.0;
         position.1 += velocity.1;
         position.2 += velocity.2;
+        n += 1;
     }
+    info!("physics n={}", n);
 }
 
 fn test(mut query: Query<(&Marker, &mut Velocity)>) {
-    for (_, velocity) in query.iter() {
+    for (_, (_, velocity)) in query.iter() {
         velocity.0 /= 2;
         velocity.1 /= 2;
         velocity.2 /= 2;
     }
 }
 
+fn cull(mut query: Query<(&Position,)>, mut commands: Commands) {
+    let mut n = 0;
+    for (e, (position,)) in query.iter() {
+        if position.0 > 95000 {
+            commands.entity(e).despawn();
+            n += 1;
+        }
+    }
+    info!("cull n={}", n);
+}
+
 fn read_events(frame: Res<Frame>, events: Events<TestEvent>) {
     for e in events.iter() {
-        tracing::info!("frame {}: receive event {}", frame.0, e.0);
+        info!("frame {}: receive event {}", frame.0, e.0);
     }
 }
