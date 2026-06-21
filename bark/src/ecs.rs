@@ -14,7 +14,7 @@ pub struct World {
     entity_id: AtomicU64,
     component_stores: HashMap<TypeKey, Box<dyn ErasedComponentStore>>,
     event_stores: HashMap<TypeKey, Box<dyn ErasedEventStore>>,
-    resources: HashMap<TypeKey, Box<dyn Any>>,
+    resources: HashMap<TypeKey, Box<dyn Any + Send + Sync>>,
     schedules: HashMap<TypeKey, Schedule>,
 }
 
@@ -29,16 +29,18 @@ impl World {
         }
     }
 
-    pub fn get_component_store<T: Any>(&self) -> Option<&ComponentStore<T>> {
+    pub fn get_component_store<T: Any + Send + Sync>(&self) -> Option<&ComponentStore<T>> {
         (self.component_stores.get(&TypeKey::of::<T>())?.as_ref() as &dyn Any).downcast_ref()
     }
 
-    pub fn get_component_store_mut<T: Any>(&mut self) -> Option<&mut ComponentStore<T>> {
+    pub fn get_component_store_mut<T: Any + Send + Sync>(
+        &mut self,
+    ) -> Option<&mut ComponentStore<T>> {
         (self.component_stores.get_mut(&TypeKey::of::<T>())?.as_mut() as &mut dyn Any)
             .downcast_mut()
     }
 
-    pub fn create_component_store<T: Any>(&mut self) -> &mut ComponentStore<T> {
+    pub fn create_component_store<T: Any + Send + Sync>(&mut self) -> &mut ComponentStore<T> {
         (self
             .component_stores
             .entry(TypeKey::of::<T>())
@@ -48,15 +50,15 @@ impl World {
             .unwrap()
     }
 
-    pub fn get_event_store<T: Any>(&self) -> Option<&EventStore<T>> {
+    pub fn get_event_store<T: Any + Send + Sync>(&self) -> Option<&EventStore<T>> {
         (self.event_stores.get(&TypeKey::of::<T>())?.as_ref() as &dyn Any).downcast_ref()
     }
 
-    pub fn get_event_store_mut<T: Any>(&mut self) -> Option<&mut EventStore<T>> {
+    pub fn get_event_store_mut<T: Any + Send + Sync>(&mut self) -> Option<&mut EventStore<T>> {
         (self.event_stores.get_mut(&TypeKey::of::<T>())?.as_mut() as &mut dyn Any).downcast_mut()
     }
 
-    pub fn create_event_store<T: Any>(&mut self) -> &mut EventStore<T> {
+    pub fn create_event_store<T: Any + Send + Sync>(&mut self) -> &mut EventStore<T> {
         (self
             .event_stores
             .entry(TypeKey::of::<T>())
@@ -66,18 +68,18 @@ impl World {
             .unwrap()
     }
 
-    pub fn insert_resource<T: Any>(&mut self, data: T) {
+    pub fn insert_resource<T: Any + Send + Sync>(&mut self, data: T) {
         let id = TypeKey::of::<T>();
         debug!("insert resource {:?}", id);
 
         self.resources.insert(id, Box::new(data));
     }
 
-    pub fn get_resource<T: Any>(&self) -> Option<&T> {
+    pub fn get_resource<T: Any + Send + Sync>(&self) -> Option<&T> {
         self.resources.get(&TypeKey::of::<T>())?.downcast_ref()
     }
 
-    pub fn get_resource_mut<T: Any>(&mut self) -> Option<&mut T> {
+    pub fn get_resource_mut<T: Any + Send + Sync>(&mut self) -> Option<&mut T> {
         self.resources.get_mut(&TypeKey::of::<T>())?.downcast_mut()
     }
 
@@ -110,11 +112,11 @@ impl World {
         }
     }
 
-    pub fn insert_component<T: Any>(&mut self, entity: EntityId, data: T) {
+    pub fn insert_component<T: Any + Send + Sync>(&mut self, entity: EntityId, data: T) {
         self.create_component_store().insert(entity, data);
     }
 
-    pub fn remove_component<T: Any>(&mut self, entity: EntityId) -> Option<T> {
+    pub fn remove_component<T: Any + Send + Sync>(&mut self, entity: EntityId) -> Option<T> {
         self.get_component_store_mut()?.remove(entity)
     }
 
@@ -124,12 +126,12 @@ impl World {
         }
     }
 
-    pub fn queue_event<T: Any>(&mut self, event: T) {
+    pub fn queue_event<T: Any + Send + Sync>(&mut self, event: T) {
         self.create_event_store::<T>().queue(event);
     }
 }
 
-trait ErasedComponentStore: Any {
+trait ErasedComponentStore: Any + Send + Sync {
     fn despawn(&mut self, entity: EntityId);
 }
 
@@ -197,13 +199,13 @@ impl<T> ComponentStore<T> {
     }
 }
 
-impl<T: Any> ErasedComponentStore for ComponentStore<T> {
+impl<T: Any + Send + Sync> ErasedComponentStore for ComponentStore<T> {
     fn despawn(&mut self, entity: EntityId) {
         self.remove(entity);
     }
 }
 
-trait ErasedEventStore: Any {
+trait ErasedEventStore: Any + Send + Sync {
     fn swap_buffers(&mut self);
 }
 
@@ -230,7 +232,7 @@ impl<T> EventStore<T> {
     }
 }
 
-impl<T: Any> ErasedEventStore for EventStore<T> {
+impl<T: Any + Send + Sync> ErasedEventStore for EventStore<T> {
     fn swap_buffers(&mut self) {
         self.current.clear();
         mem::swap(&mut self.current, &mut self.queued);
@@ -261,11 +263,18 @@ impl Schedule {
         }
 
         for layer in self.layers.as_ref().unwrap() {
-            // todo: multithread
-            for &i in layer {
-                // safety: we trust layers to be setup correctly to ensure safe access
-                unsafe {
-                    self.systems[i].run(ptr::from_mut(world));
+            // safety: we trust layers to be setup correctly to ensure safe access
+            unsafe {
+                if layer.len() == 1 {
+                    self.systems[layer[0]].run(ptr::from_mut(world));
+                } else {
+                    rayon::scope(|s| {
+                        let world_ptr = ptr::from_mut(world) as usize;
+                        for &i in layer {
+                            let sys = &raw mut self.systems[i] as usize;
+                            s.spawn(move |_| (*(sys as *mut Box<dyn System>)).run(world_ptr as _));
+                        }
+                    });
                 }
             }
         }
@@ -350,7 +359,7 @@ impl Schedule {
     }
 }
 
-pub trait System {
+pub trait System: Send + Sync {
     fn get_meta(&self) -> &SystemMeta;
     fn get_meta_mut(&mut self) -> &mut SystemMeta;
     /// safety: must only be called according to `SystemMeta`
@@ -398,6 +407,7 @@ pub struct SystemMeta {
     component_access: HashMap<TypeKey, Access>,
     resource_access: HashMap<TypeKey, Access>,
     constraints: HashMap<TypeKey, SystemOrder>,
+    main_thread: bool,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -425,21 +435,25 @@ impl SystemMeta {
             component_access: HashMap::new(),
             resource_access: HashMap::new(),
             constraints: HashMap::new(),
+            main_thread: false,
         }
     }
 
     fn conflicts(&self, other: &Self) -> bool {
-        self.component_access.iter().any(|(id, access)| {
-            other
-                .component_access
-                .get(id)
-                .is_some_and(|other| access.conflicts(*other))
-        }) || self.resource_access.iter().any(|(id, access)| {
-            other
-                .resource_access
-                .get(id)
-                .is_some_and(|other| access.conflicts(*other))
-        })
+        self.main_thread
+            || other.main_thread
+            || self.component_access.iter().any(|(id, access)| {
+                other
+                    .component_access
+                    .get(id)
+                    .is_some_and(|other| access.conflicts(*other))
+            })
+            || self.resource_access.iter().any(|(id, access)| {
+                other
+                    .resource_access
+                    .get(id)
+                    .is_some_and(|other| access.conflicts(*other))
+            })
     }
 }
 
@@ -451,7 +465,7 @@ struct SystemStorage<F, S, P> {
 }
 
 trait SystemParam: Sized {
-    type State;
+    type State: Send + Sync;
 
     fn init(meta: &mut SystemMeta) -> Self::State;
     /// safety: must only be called according to `init`
@@ -462,7 +476,7 @@ trait SystemParam: Sized {
 
 macro_rules! impl_system {
     ($(($n:tt, $P:ident)),*) => {
-        impl<F: Fn($($P),*) + Any, $($P: SystemParam + Any),*> System for SystemStorage<F, ($($P::State,)*), ($($P,)*)> {
+        impl<F: Fn($($P),*) + Any + Send + Sync, $($P: SystemParam + Any + Send + Sync),*> System for SystemStorage<F, ($($P::State,)*), ($($P,)*)> {
             fn get_meta(&self) -> &SystemMeta { &self.meta }
             fn get_meta_mut(&mut self) -> &mut SystemMeta { &mut self.meta }
 
@@ -486,7 +500,7 @@ macro_rules! impl_system {
             }
         }
 
-        impl<F: Fn($($P),*) + Any, $($P: SystemParam + Any),*> IntoSystem<($($P,)*)> for F {
+        impl<F: Fn($($P),*) + Any + Send + Sync, $($P: SystemParam + Any + Send + Sync),*> IntoSystem<($($P,)*)> for F {
             fn into_system(self) -> Box<dyn System> {
                 #[allow(unused_mut)]
                 let mut meta = SystemMeta::new(TypeKey::of::<F>());
@@ -506,7 +520,7 @@ variadics_please::all_tuples_enumerated!(impl_system, 0, 16, P);
 
 pub struct Res<'w, T>(&'w T);
 
-impl<T: Any> SystemParam for Res<'_, T> {
+impl<T: Any + Send + Sync> SystemParam for Res<'_, T> {
     type State = ();
 
     fn init(meta: &mut SystemMeta) {
@@ -536,7 +550,7 @@ impl<T> ops::Deref for Res<'_, T> {
 
 pub struct ResMut<'w, T>(&'w mut T);
 
-impl<T: Any> SystemParam for ResMut<'_, T> {
+impl<T: Any + Send + Sync> SystemParam for ResMut<'_, T> {
     type State = ();
 
     fn init(meta: &mut SystemMeta) {
@@ -553,6 +567,20 @@ impl<T: Any> SystemParam for ResMut<'_, T> {
     unsafe fn fetch(world: *mut World, _: *mut Self::State) -> Self {
         // safety: we requested this in `init`
         Self(unsafe { (*world).get_resource_mut() }.unwrap())
+    }
+}
+
+pub struct MainThread;
+
+impl SystemParam for MainThread {
+    type State = ();
+
+    fn init(meta: &mut SystemMeta) {
+        meta.main_thread = true;
+    }
+
+    unsafe fn fetch(_: *mut World, _: *mut Self::State) -> Self {
+        Self
     }
 }
 
@@ -652,7 +680,7 @@ macro_rules! impl_query {
 
 variadics_please::all_tuples_enumerated!(impl_query, 1, 16, P, I);
 
-impl<T: Any> QueryData for &T {
+impl<T: Any + Send + Sync> QueryData for &T {
     fn declare_access(meta: &mut SystemMeta) {
         let id = TypeKey::of::<T>();
         if let Some(Access::Write) = meta.component_access.get(&id) {
@@ -670,7 +698,7 @@ impl<T: Any> QueryData for &T {
     }
 }
 
-impl<T: Any> QueryData for &mut T {
+impl<T: Any + Send + Sync> QueryData for &mut T {
     fn declare_access(meta: &mut SystemMeta) {
         let id = TypeKey::of::<T>();
         if meta.component_access.contains_key(&id) {
@@ -703,11 +731,11 @@ impl Commands<'_> {
         EntityCommands(self.1, entity)
     }
 
-    pub fn insert_resource<T: Any>(&mut self, data: T) {
+    pub fn insert_resource<T: Any + Send + Sync>(&mut self, data: T) {
         self.1.push(Box::new(InsertResourceCommand(data)));
     }
 
-    pub fn queue_event<T: Any>(&mut self, event: T) {
+    pub fn queue_event<T: Any + Send + Sync>(&mut self, event: T) {
         self.1.push(Box::new(QueueEventCommand(event)));
     }
 }
@@ -734,11 +762,11 @@ impl SystemParam for Commands<'_> {
 pub struct EntityCommands<'w>(&'w mut CommandBuffer, EntityId);
 
 impl EntityCommands<'_> {
-    pub fn insert<T: Any>(&mut self, data: T) {
+    pub fn insert<T: Any + Send + Sync>(&mut self, data: T) {
         self.0.push(Box::new(InsertComponentCommand(data, self.1)));
     }
 
-    pub fn remove<T: Any>(&mut self) {
+    pub fn remove<T: Any + Send + Sync>(&mut self) {
         self.0
             .push(Box::new(RemoveComponentCommand(PhantomData::<T>, self.1)));
     }
@@ -748,13 +776,13 @@ impl EntityCommands<'_> {
     }
 }
 
-trait Command {
+trait Command: Send + Sync {
     fn apply(self: Box<Self>, world: &mut World);
 }
 
 struct InsertComponentCommand<T>(T, EntityId);
 
-impl<T: Any> Command for InsertComponentCommand<T> {
+impl<T: Any + Send + Sync> Command for InsertComponentCommand<T> {
     fn apply(self: Box<Self>, world: &mut World) {
         world.insert_component(self.1, self.0);
     }
@@ -762,7 +790,7 @@ impl<T: Any> Command for InsertComponentCommand<T> {
 
 struct RemoveComponentCommand<T>(PhantomData<T>, EntityId);
 
-impl<T: Any> Command for RemoveComponentCommand<T> {
+impl<T: Any + Send + Sync> Command for RemoveComponentCommand<T> {
     fn apply(self: Box<Self>, world: &mut World) {
         world.remove_component::<T>(self.1);
     }
@@ -778,7 +806,7 @@ impl Command for DespawnCommand {
 
 struct InsertResourceCommand<T>(T);
 
-impl<T: Any> Command for InsertResourceCommand<T> {
+impl<T: Any + Send + Sync> Command for InsertResourceCommand<T> {
     fn apply(self: Box<Self>, world: &mut World) {
         world.insert_resource(self.0)
     }
@@ -786,7 +814,7 @@ impl<T: Any> Command for InsertResourceCommand<T> {
 
 struct QueueEventCommand<T>(T);
 
-impl<T: Any> Command for QueueEventCommand<T> {
+impl<T: Any + Send + Sync> Command for QueueEventCommand<T> {
     fn apply(self: Box<Self>, world: &mut World) {
         world.queue_event(self.0)
     }
@@ -800,7 +828,7 @@ impl<'w, T> Events<'w, T> {
     }
 }
 
-impl<T: Any> SystemParam for Events<'_, T> {
+impl<T: Any + Send + Sync> SystemParam for Events<'_, T> {
     type State = ();
 
     fn init(_: &mut SystemMeta) {}

@@ -1,6 +1,6 @@
 use crate::app::{self, App, ResizeEvent, WindowHandle};
 use crate::assets::{AssetProcessor, AssetProcessors};
-use crate::ecs::{Commands, Events, Res, ResMut};
+use crate::ecs::{Commands, Events, MainThread, Res, ResMut};
 use glam::{Vec2, Vec3, Vec4};
 use image::imageops::{self, FilterType};
 use intel_tex_2::{RSurface, RgSurface, RgbaSurface, bc4, bc5, bc7};
@@ -21,7 +21,7 @@ struct RenderContext {
     queue: wgpu::Queue,
 }
 
-fn init_renderer(window: Res<WindowHandle>, mut commands: Commands) {
+fn init_renderer(window: Res<WindowHandle>, mut commands: Commands, _: MainThread) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let surface = instance.create_surface(window.clone()).unwrap();
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {

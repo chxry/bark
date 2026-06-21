@@ -8,7 +8,7 @@ use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::rc::Weak;
+use std::sync::Weak;
 use tracing::debug;
 use twox_hash::XxHash3_64;
 
@@ -22,7 +22,7 @@ pub fn init<P: Into<PathBuf>>(app: &mut App, assets_dir: P) {
 pub struct Assets {
     manifest: Manifest,
     cache_dir: PathBuf,
-    storage: HashMap<String, Weak<dyn Any>>,
+    storage: HashMap<String, Weak<dyn Any + Send + Sync>>,
 }
 
 impl Assets {
@@ -115,7 +115,7 @@ impl AssetProcessors {
             .collect::<Vec<_>>();
 
         let mut n_cache_hits = 0;
-        for (entry, new_hash) in self.manifest.0.values_mut().zip(hashes.into_iter()) {
+        for (entry, new_hash) in self.manifest.0.values_mut().zip(hashes) {
             if entry.hash != new_hash {
                 entry.hash = new_hash;
             } else {

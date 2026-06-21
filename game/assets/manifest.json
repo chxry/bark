@@ -1,4 +1,13 @@
 {
+  "potted_plant_02_leaves_nor_gl_4k.png": {
+    "ty": "texture",
+    "hash": "e2e4fb023cb5dc62",
+    "options": {
+      "compression": "bc5",
+      "generate_mipmaps": true,
+      "mode": "normal"
+    }
+  },
   "potted_plant_02_pot_arm_4k.png": {
     "ty": "texture",
     "hash": "af57e2cc97deb0ff",
@@ -8,14 +17,28 @@
       "mode": "linear"
     }
   },
-  "potted_plant_02_leaves_nor_gl_4k.png": {
+  "potted_plant_02_leaves_diff_4k.png": {
     "ty": "texture",
-    "hash": "e2e4fb023cb5dc62",
+    "hash": "109ae78d7d8b0586",
     "options": {
-      "compression": "bc5",
+      "compression": "bc7",
       "generate_mipmaps": true,
-      "mode": "normal"
+      "mode": "srgb"
     }
+  },
+  "potted_plant_02_leaves_arm_4k.png": {
+    "ty": "texture",
+    "hash": "ef45faea4e776087",
+    "options": {
+      "compression": "bc7",
+      "generate_mipmaps": true,
+      "mode": "linear"
+    }
+  },
+  "potted_plant_02_leaves.obj": {
+    "ty": "mesh",
+    "hash": "2f8063823106746a",
+    "options": null
   },
   "potted_plant_02_pot.obj": {
     "ty": "mesh",
@@ -38,29 +61,6 @@
       "compression": "bc7",
       "generate_mipmaps": true,
       "mode": "srgb"
-    }
-  },
-  "potted_plant_02_leaves_diff_4k.png": {
-    "ty": "texture",
-    "hash": "109ae78d7d8b0586",
-    "options": {
-      "compression": "bc7",
-      "generate_mipmaps": true,
-      "mode": "srgb"
-    }
-  },
-  "potted_plant_02_leaves.obj": {
-    "ty": "mesh",
-    "hash": "2f8063823106746a",
-    "options": null
-  },
-  "potted_plant_02_leaves_arm_4k.png": {
-    "ty": "texture",
-    "hash": "ef45faea4e776087",
-    "options": {
-      "compression": "bc7",
-      "generate_mipmaps": true,
-      "mode": "linear"
     }
   }
 }
