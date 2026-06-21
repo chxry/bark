@@ -1,10 +1,19 @@
 use bark::app::{self, ResizeEvent};
+use bark::assets::AssetProcessors;
 use bark::ecs::{Commands, Events, Query};
-use bark::gfx;
+use bark::{assets, gfx};
 use tracing::{info, trace};
 use tracing_subscriber::EnvFilter;
 
+// move out of game crate
+fn process_assets() {
+    let mut assets = AssetProcessors::new(env!("CARGO_MANIFEST_DIR").to_owned() + "/assets");
+    gfx::init_build(&mut assets);
+    assets.run();
+}
+
 fn main() {
+    process_assets();
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,bark=debug")),
@@ -13,6 +22,7 @@ fn main() {
 
     let mut app = bark::App::new();
     gfx::init(&mut app);
+    assets::init(&mut app, env!("CARGO_MANIFEST_DIR").to_owned() + "/assets");
     app.world.insert_system(app::Startup, spawn);
     // app.world.insert_system(app::Update, physics);
     // app.world.insert_system(app::Update, cull.after(physics));

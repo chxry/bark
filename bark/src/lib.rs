@@ -4,8 +4,8 @@ pub mod ecs;
 pub mod gfx;
 
 use std::any::{self, Any, TypeId};
-use std::fmt;
 use std::hash::{Hash, Hasher};
+use std::{fmt, mem, slice};
 
 pub use app::App;
 
@@ -40,4 +40,13 @@ impl fmt::Debug for TypeKey {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.name.fmt(f)
     }
+}
+
+pub fn cast_bytes_slice<T>(x: &[T]) -> &[u8] {
+    // safety: u8 is always valid
+    unsafe { slice::from_raw_parts(x.as_ptr() as _, mem::size_of_val(x)) }
+}
+
+pub fn cast_bytes<T>(x: &T) -> &[u8] {
+    cast_bytes_slice(slice::from_ref(x))
 }

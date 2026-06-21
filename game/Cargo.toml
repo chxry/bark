@@ -6,4 +6,4 @@ edition = "2024"
 [dependencies]
 bark = { path = "../bark" }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] } 
