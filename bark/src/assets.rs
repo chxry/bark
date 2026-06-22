@@ -1,14 +1,15 @@
 use crate::App;
+use memmap2::Mmap;
 use rayon::prelude::*;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::any::Any;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
+use std::ops;
 use std::path::PathBuf;
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 use tracing::debug;
 use twox_hash::XxHash3_64;
 
@@ -22,7 +23,7 @@ pub fn init<P: Into<PathBuf>>(app: &mut App, assets_dir: P) {
 pub struct Assets {
     manifest: Manifest,
     cache_dir: PathBuf,
-    storage: HashMap<String, Weak<dyn Any + Send + Sync>>,
+    storage: HashMap<String, Weak<Mmap>>,
 }
 
 impl Assets {
@@ -37,6 +38,38 @@ impl Assets {
             cache_dir,
             storage: HashMap::new(),
         }
+    }
+
+    pub fn load(&mut self, id: &str) -> Handle {
+        match self.storage.get(id).and_then(|h| h.upgrade()) {
+            Some(h) => Handle(h),
+            None => {
+                let entry = self.manifest.0.get(id).unwrap();
+                let map = Arc::new(
+                    // safety: we're not modifying the asset files, so not our problem
+                    unsafe {
+                        Mmap::map(
+                            &File::open(self.cache_dir.join(hex::encode(entry.hash.to_be_bytes())))
+                                .unwrap(),
+                        )
+                    }
+                    .unwrap(),
+                );
+                self.storage.insert(id.to_owned(), Arc::downgrade(&map));
+                Handle(map)
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Handle(Arc<Mmap>);
+
+impl ops::Deref for Handle {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -85,7 +118,7 @@ impl AssetProcessors {
     }
 
     pub fn register<T: AssetProcessor + 'static>(&mut self, ty: &str, processor: T) {
-        self.processors.insert(ty.into(), Box::new(processor));
+        self.processors.insert(ty.to_owned(), Box::new(processor));
     }
 
     pub fn run(mut self) {
@@ -94,37 +127,42 @@ impl AssetProcessors {
             .manifest
             .0
             .par_iter()
-            .map(|(path, entry)| {
-                let src_path = self.assets_dir.join(path);
+            .map(|(id, entry)| {
+                let src_path = self.assets_dir.join(id);
                 let bytes = fs::read(&src_path).unwrap();
 
                 let hash = hash_asset(&bytes, &entry.options);
                 let cache_path = self.cache_dir.join(hex::encode(hash.to_be_bytes()));
 
-                if entry.hash != hash || !cache_path.exists() {
-                    build_log("Processing", &format!("{} ({})", path, entry.ty));
-                    let processor = self.processors.get(&entry.ty).unwrap();
-                    processor.process_erased(
-                        File::open(&src_path).unwrap(),
-                        File::create(&cache_path).unwrap(),
-                        &entry.options,
-                    );
+                if entry.hash == hash && cache_path.exists() {
+                    return None;
                 }
-                hash
+
+                build_log("Processing", &format!("{} ({})", id, entry.ty));
+                let processor = self.processors.get(&entry.ty).unwrap();
+                processor.process_erased(
+                    File::open(&src_path).unwrap(),
+                    File::create(&cache_path).unwrap(),
+                    &entry.options,
+                );
+                Some(hash)
             })
             .collect::<Vec<_>>();
 
-        let mut n_cache_hits = 0;
-        for (entry, new_hash) in self.manifest.0.values_mut().zip(hashes) {
-            if entry.hash != new_hash {
-                entry.hash = new_hash;
-            } else {
-                n_cache_hits += 1;
+        let mut n_processed = 0;
+        for (entry, out) in self.manifest.0.values_mut().zip(hashes) {
+            if let Some(hash) = out {
+                entry.hash = hash;
+                n_processed += 1;
             }
         }
         build_log(
             "Processed",
-            &format!("{} assets, {} cached", self.manifest.0.len(), n_cache_hits),
+            &format!(
+                "{} assets, {} cached",
+                n_processed,
+                self.manifest.0.len() - n_processed
+            ),
         );
 
         let manifest_path = self.assets_dir.join(MANIFEST_FILE);
@@ -160,7 +198,7 @@ impl<T: AssetProcessor> ErasedAssetProcessor for T {
 fn build_log(status: &str, msg: &str) {
     println!(
         // "cargo::warning=\r\x1b[K\x1b[1;32m{:>12}\x1b[0m {}",
-        "\x1b[K\x1b[1;32m{:>12}\x1b[0m {}",
+        "\x1b[1;32m{:>12}\x1b[0m {}",
         status, msg
     );
 }

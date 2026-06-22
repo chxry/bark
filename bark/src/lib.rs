@@ -1,5 +1,6 @@
 pub mod app;
 pub mod assets;
+pub mod bark3d;
 pub mod ecs;
 pub mod gfx;
 

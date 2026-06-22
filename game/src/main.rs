@@ -1,8 +1,9 @@
-use bark::app::{self, ResizeEvent};
-use bark::assets::AssetProcessors;
-use bark::ecs::{Commands, Events, Query};
+use bark::app::{self};
+use bark::assets::{AssetProcessors, Assets};
+use bark::ecs::ResMut;
+use bark::gfx::texture::TextureHeader;
 use bark::{assets, gfx};
-use tracing::{info, trace};
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 // move out of game crate
@@ -24,48 +25,11 @@ fn main() {
     gfx::init(&mut app);
     assets::init(&mut app, env!("CARGO_MANIFEST_DIR").to_owned() + "/assets");
     app.world.insert_system(app::Startup, spawn);
-    // app.world.insert_system(app::Update, physics);
-    // app.world.insert_system(app::Update, cull.after(physics));
-    app.world.insert_system(app::Update, read_events);
 
     app.run();
 }
 
-struct Position(u32, u32, u32);
-struct Velocity(u32, u32, u32);
-
-fn spawn(mut commands: Commands) {
-    for i in 0..10000 {
-        let mut test = commands.spawn();
-        test.insert(Position(i, i, i));
-        test.insert(Velocity(i, i, i));
-    }
-}
-
-fn physics(mut query: Query<(&mut Position, &Velocity)>) {
-    let mut n = 0;
-    for (_, (position, velocity)) in query.iter() {
-        position.0 += velocity.0;
-        position.1 += velocity.1;
-        position.2 += velocity.2;
-        n += 1;
-    }
-    trace!("physics n={}", n);
-}
-
-fn cull(mut query: Query<(&Position,)>, mut commands: Commands) {
-    let mut n = 0;
-    for (e, (position,)) in query.iter() {
-        if position.0 > 95000 {
-            commands.entity(e).despawn();
-            n += 1;
-        }
-    }
-    info!("cull n={}", n);
-}
-
-fn read_events(events: Events<ResizeEvent>) {
-    if let Some(event) = events.iter().last() {
-        info!("resized! width={} height={}", event.width, event.height);
-    }
+fn spawn(mut assets: ResMut<Assets>) {
+    let handle = assets.load("potted_plant_02_leaves_diff_4k.png");
+    info!("{:?}", TextureHeader::read(&*handle));
 }

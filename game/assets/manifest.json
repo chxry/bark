@@ -1,25 +1,7 @@
 {
-  "potted_plant_02_leaves_nor_gl_4k.png": {
+  "potted_plant_02_pot_diff_4k.png": {
     "ty": "texture",
-    "hash": "e2e4fb023cb5dc62",
-    "options": {
-      "compression": "bc5",
-      "generate_mipmaps": true,
-      "mode": "normal"
-    }
-  },
-  "potted_plant_02_pot_arm_4k.png": {
-    "ty": "texture",
-    "hash": "af57e2cc97deb0ff",
-    "options": {
-      "compression": "bc7",
-      "generate_mipmaps": true,
-      "mode": "linear"
-    }
-  },
-  "potted_plant_02_leaves_diff_4k.png": {
-    "ty": "texture",
-    "hash": "109ae78d7d8b0586",
+    "hash": "efbaaad999ff5878",
     "options": {
       "compression": "bc7",
       "generate_mipmaps": true,
@@ -35,15 +17,42 @@
       "mode": "linear"
     }
   },
-  "potted_plant_02_leaves.obj": {
-    "ty": "mesh",
-    "hash": "2f8063823106746a",
-    "options": null
+  "potted_plant_02_pot_arm_4k.png": {
+    "ty": "texture",
+    "hash": "af57e2cc97deb0ff",
+    "options": {
+      "compression": "bc7",
+      "generate_mipmaps": true,
+      "mode": "linear"
+    }
   },
   "potted_plant_02_pot.obj": {
     "ty": "mesh",
     "hash": "02dba583c8ebc887",
     "options": null
+  },
+  "potted_plant_02_leaves_diff_4k.png": {
+    "ty": "texture",
+    "hash": "109ae78d7d8b0586",
+    "options": {
+      "compression": "bc7",
+      "generate_mipmaps": true,
+      "mode": "srgb"
+    }
+  },
+  "potted_plant_02_leaves.obj": {
+    "ty": "mesh",
+    "hash": "2f8063823106746a",
+    "options": null
+  },
+  "potted_plant_02_leaves_nor_gl_4k.png": {
+    "ty": "texture",
+    "hash": "e2e4fb023cb5dc62",
+    "options": {
+      "compression": "bc5",
+      "generate_mipmaps": true,
+      "mode": "normal"
+    }
   },
   "potted_plant_02_pot_nor_gl_4k.png": {
     "ty": "texture",
@@ -52,15 +61,6 @@
       "compression": "bc5",
       "generate_mipmaps": true,
       "mode": "normal"
-    }
-  },
-  "potted_plant_02_pot_diff_4k.png": {
-    "ty": "texture",
-    "hash": "efbaaad999ff5878",
-    "options": {
-      "compression": "bc7",
-      "generate_mipmaps": true,
-      "mode": "srgb"
     }
   }
 }

@@ -1,3 +1,4 @@
+// todo: use of raw pointers is evil, atleast consider nonnull or unsafecell. casting raw pointers to usize to avoid !Send + !Sync restrictions is also scary
 use crate::TypeKey;
 use std::any::{self, Any};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -5,7 +6,7 @@ use std::iter::Peekable;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{mem, ops, ptr, slice};
-use tracing::{debug, trace};
+use tracing::trace;
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct EntityId(u64);
@@ -18,6 +19,7 @@ pub struct World {
     schedules: HashMap<TypeKey, Schedule>,
 }
 
+// todo: refactor all .downcast_xxx() calls to panic with typeid info instead of silenting returning none
 impl World {
     pub fn new() -> Self {
         Self {
@@ -70,7 +72,7 @@ impl World {
 
     pub fn insert_resource<T: Any + Send + Sync>(&mut self, data: T) {
         let id = TypeKey::of::<T>();
-        debug!("insert resource {:?}", id);
+        trace!("insert resource {:?}", id);
 
         self.resources.insert(id, Box::new(data));
     }
@@ -81,6 +83,12 @@ impl World {
 
     pub fn get_resource_mut<T: Any + Send + Sync>(&mut self) -> Option<&mut T> {
         self.resources.get_mut(&TypeKey::of::<T>())?.downcast_mut()
+    }
+
+    pub fn take_resource<T: Any + Send + Sync>(&mut self) -> Option<T> {
+        self.resources
+            .remove(&TypeKey::of::<T>())
+            .map(|x| *x.downcast().unwrap())
     }
 
     pub fn insert_system<T: Any, S: IntoSystem<P>, P>(&mut self, _: T, sys: S) {
@@ -143,7 +151,7 @@ pub struct ComponentStore<T> {
 
 impl<T> ComponentStore<T> {
     fn new() -> Self {
-        debug!("new component type {:?}", any::type_name::<T>());
+        trace!("new component type {:?}", any::type_name::<T>());
         Self {
             entities: vec![],
             data: vec![],
@@ -216,7 +224,7 @@ pub struct EventStore<T> {
 
 impl<T> EventStore<T> {
     fn new() -> Self {
-        debug!("new event type {:?}", any::type_name::<T>());
+        trace!("new event type {:?}", any::type_name::<T>());
         Self {
             current: vec![],
             queued: vec![],
@@ -277,10 +285,11 @@ impl Schedule {
                     });
                 }
             }
-        }
-        // todo: batch world operations, insertions and removals are costly
-        for sys in &mut self.systems {
-            sys.flush(world);
+
+            // todo: batch world operations, insertions and removals are costly
+            for &i in layer {
+                self.systems[i].flush(world);
+            }
         }
     }
 
@@ -355,6 +364,28 @@ impl Schedule {
         for (i, l) in layer_of.iter().enumerate() {
             layers[*l].push(i);
         }
+
+        // let mut dot = String::new();
+        // dot.push_str("digraph schedule {\n");
+        // for (n, l) in layers.iter().enumerate() {
+        //     dot.push_str(&format!(
+        //         "subgraph cluster_{} {{\nlabel=\"layer {0}\";\nlabeljust=l;\n",
+        //         n
+        //     ));
+        //     for &i in l.iter() {
+        //         dot.push_str(&format!(
+        //             "n{i} [label=\"{}\"];\n",
+        //             self.systems[i].get_meta().type_id.name
+        //         ));
+        //     }
+        //     dot.push_str("}\n");
+        // }
+        // for &(a, b) in &edges {
+        //     dot.push_str(&format!("n{a} -> n{b};\n"));
+        // }
+        // dot.push_str("}");
+        // println!("{}", dot);
+
         layers
     }
 }
@@ -407,7 +438,7 @@ pub struct SystemMeta {
     component_access: HashMap<TypeKey, Access>,
     resource_access: HashMap<TypeKey, Access>,
     constraints: HashMap<TypeKey, SystemOrder>,
-    main_thread: bool,
+    exclusive: bool,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -435,13 +466,13 @@ impl SystemMeta {
             component_access: HashMap::new(),
             resource_access: HashMap::new(),
             constraints: HashMap::new(),
-            main_thread: false,
+            exclusive: false,
         }
     }
 
     fn conflicts(&self, other: &Self) -> bool {
-        self.main_thread
-            || other.main_thread
+        self.exclusive
+            || other.exclusive
             || self.component_access.iter().any(|(id, access)| {
                 other
                     .component_access
@@ -548,6 +579,12 @@ impl<T> ops::Deref for Res<'_, T> {
     }
 }
 
+impl<T> AsRef<T> for Res<'_, T> {
+    fn as_ref(&self) -> &T {
+        self.0
+    }
+}
+
 pub struct ResMut<'w, T>(&'w mut T);
 
 impl<T: Any + Send + Sync> SystemParam for ResMut<'_, T> {
@@ -570,20 +607,6 @@ impl<T: Any + Send + Sync> SystemParam for ResMut<'_, T> {
     }
 }
 
-pub struct MainThread;
-
-impl SystemParam for MainThread {
-    type State = ();
-
-    fn init(meta: &mut SystemMeta) {
-        meta.main_thread = true;
-    }
-
-    unsafe fn fetch(_: *mut World, _: *mut Self::State) -> Self {
-        Self
-    }
-}
-
 impl<T> ops::Deref for ResMut<'_, T> {
     type Target = T;
 
@@ -598,10 +621,34 @@ impl<T> ops::DerefMut for ResMut<'_, T> {
     }
 }
 
+impl<T> AsMut<T> for ResMut<'_, T> {
+    fn as_mut(&mut self) -> &mut T {
+        self.0
+    }
+}
+
+pub struct MainThread;
+
+impl SystemParam for MainThread {
+    type State = ();
+
+    fn init(meta: &mut SystemMeta) {
+        meta.exclusive = true;
+    }
+
+    unsafe fn fetch(_: *mut World, _: *mut Self::State) -> Self {
+        Self
+    }
+}
+
 pub struct Query<P> {
     world: *mut World,
     params: PhantomData<P>,
 }
+
+// safety: ill do what i want with raw pointers
+unsafe impl<P> Send for Query<P> {}
+unsafe impl<P> Sync for Query<P> {}
 
 pub trait QueryData: Sized {
     fn declare_access(meta: &mut SystemMeta);
