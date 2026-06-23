@@ -44,11 +44,24 @@ impl fmt::Debug for TypeKey {
     }
 }
 
-pub fn cast_bytes_slice<T>(x: &[T]) -> &[u8] {
-    // safety: u8 is always valid
+/// safety: `T` shouldn't contain any padding
+pub unsafe fn cast_bytes_slice<T>(x: &[T]) -> &[u8] {
     unsafe { slice::from_raw_parts(x.as_ptr() as _, mem::size_of_val(x)) }
 }
 
-pub fn cast_bytes<T>(x: &T) -> &[u8] {
-    cast_bytes_slice(slice::from_ref(x))
+/// safety: `T` shouldn't contain any padding
+pub unsafe fn cast_bytes<T>(x: &T) -> &[u8] {
+    unsafe { cast_bytes_slice(slice::from_ref(x)) }
+}
+
+/// safety: `T` shouldn't contain any padding
+pub unsafe fn cast_bytes_vec<T>(x: Vec<T>) -> Vec<u8> {
+    let (ptr, len, cap) = x.into_raw_parts();
+    unsafe {
+        Vec::from_raw_parts(
+            ptr as _,
+            len * mem::size_of::<T>(),
+            cap * mem::size_of::<T>(),
+        )
+    }
 }

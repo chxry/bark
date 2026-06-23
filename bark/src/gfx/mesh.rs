@@ -1,18 +1,49 @@
 use crate::assets::{Asset, AssetProcessor};
+use crate::cast_bytes_vec;
 use crate::math::{Vec2, Vec3, Vec4};
-use memmap2::Mmap;
 use std::io::{BufReader, Read, Write};
+use std::mem;
 
 pub struct Mesh {
-    pub header: MeshHeader,
-    pub data: Mmap,
+    vertex_data: Vec<u8>,
+    index_data: Vec<u8>,
+}
+
+impl Mesh {
+    fn vertex_count(&self) -> u32 {
+        (self.vertex_data.len() / mem::size_of::<Vertex>()) as _
+    }
+
+    fn index_count(&self) -> u32 {
+        (self.index_data.len() / mem::size_of::<u32>()) as _
+    }
+
+    fn write<W: Write>(&self, mut writer: W) {
+        writer
+            .write_all(&self.vertex_count().to_le_bytes())
+            .unwrap();
+        writer.write_all(&self.index_count().to_le_bytes()).unwrap();
+        writer.write_all(&self.vertex_data).unwrap();
+        writer.write_all(&self.index_data).unwrap();
+    }
 }
 
 impl Asset for Mesh {
-    fn read(data: Mmap) -> Self {
+    fn read<R: Read>(mut reader: R) -> Self {
+        let mut header = [0; 8];
+        reader.read_exact(&mut header).unwrap();
+
+        let vertex_count = u32::from_le_bytes(header[0..4].try_into().unwrap());
+        let index_count = u32::from_le_bytes(header[4..8].try_into().unwrap());
+
+        let mut vertex_data = vec![0; vertex_count as usize * mem::size_of::<Vertex>()];
+        let mut index_data = vec![0; index_count as usize * mem::size_of::<u32>()];
+        reader.read_exact(&mut vertex_data).unwrap();
+        reader.read_exact(&mut index_data).unwrap();
+
         Self {
-            header: MeshHeader::read(&*data),
-            data,
+            vertex_data,
+            index_data,
         }
     }
 }
@@ -24,27 +55,6 @@ pub struct Vertex {
     pub uv: Vec2,
     pub normal: Vec3,
     pub tangent: Vec4,
-}
-
-pub struct MeshHeader {
-    pub vertices_len: u32,
-    pub indices_len: u32,
-}
-
-impl MeshHeader {
-    pub fn write<W: Write>(&self, mut writer: W) {
-        writer.write_all(&self.vertices_len.to_le_bytes()).unwrap();
-        writer.write_all(&self.indices_len.to_le_bytes()).unwrap();
-    }
-
-    pub fn read<R: Read>(mut reader: R) -> Self {
-        let mut buf = [0; 8];
-        reader.read_exact(&mut buf).unwrap();
-        Self {
-            vertices_len: u32::from_le_bytes(buf[0..4].try_into().unwrap()),
-            indices_len: u32::from_le_bytes(buf[4..8].try_into().unwrap()),
-        }
-    }
 }
 
 pub struct MeshProcessor;
@@ -65,12 +75,6 @@ impl AssetProcessor for MeshProcessor {
             })
             .collect::<Vec<_>>();
         let indices = obj.indices;
-
-        let header = MeshHeader {
-            vertices_len: vertices.len() as _,
-            indices_len: indices.len() as _,
-        };
-        header.write(out);
 
         let mut tangents = vec![Vec3::ZERO; vertices.len()];
         let mut bitangents = vec![Vec3::ZERO; vertices.len()];
@@ -119,5 +123,14 @@ impl AssetProcessor for MeshProcessor {
 
             v.tangent = tangent.extend(handedness);
         }
+
+        // safety: `Vertex` is valid for `cast_bytes_vec`
+        let mesh = unsafe {
+            Mesh {
+                vertex_data: cast_bytes_vec(vertices),
+                index_data: cast_bytes_vec(indices),
+            }
+        };
+        mesh.write(out);
     }
 }

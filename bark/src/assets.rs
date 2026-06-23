@@ -1,5 +1,4 @@
 use crate::App;
-use memmap2::Mmap;
 use rayon::prelude::*;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -8,9 +7,8 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
-use std::ops;
 use std::path::PathBuf;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, OnceLock, Weak};
 use tracing::debug;
 use twox_hash::XxHash3_64;
 
@@ -24,6 +22,7 @@ pub fn init<P: Into<PathBuf>>(app: &mut App, assets_dir: P) {
 pub struct Assets {
     manifest: Manifest,
     cache_dir: PathBuf,
+    thread_pool: rayon::ThreadPool,
     storage: HashMap<String, Weak<dyn Any + Send + Sync>>,
 }
 
@@ -34,31 +33,42 @@ impl Assets {
         let manifest = serde_json::from_reader(File::open(&manifest_path).unwrap()).unwrap();
         debug!("loaded manifest from {:?}", manifest_path);
 
+        let thread_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .thread_name(|i| format!("asset-io-{i}"))
+            .build()
+            .unwrap();
+        debug!(
+            "using {} asset loader threads",
+            thread_pool.current_num_threads()
+        );
+
         Self {
             manifest,
             cache_dir,
+            thread_pool,
             storage: HashMap::new(),
         }
     }
 
     pub fn load<T: Asset>(&mut self, id: &str) -> Handle<T> {
         match self.storage.get(id).and_then(|h| h.upgrade()) {
-            Some(h) => Handle(id.to_owned(), h.downcast().unwrap()),
+            Some(h) => Handle(h.downcast().unwrap()),
             None => {
                 debug!("load asset {:?}", id);
                 let entry = self.manifest.0.get(id).unwrap();
-                // safety: we're not modifying the asset files, so not our problem
-                let map = unsafe {
-                    Mmap::map(
-                        &File::open(self.cache_dir.join(hex::encode(entry.hash.to_be_bytes())))
-                            .unwrap(),
-                    )
-                }
-                .unwrap();
-                let handle = Handle(id.to_owned(), Arc::new(T::read(map)));
+                let path = self.cache_dir.join(hex::encode(entry.hash.to_be_bytes()));
+                let handle = Handle(Arc::new((id.to_owned(), OnceLock::new())));
+
+                let handle2 = handle.clone();
+                self.thread_pool.spawn(move || {
+                    let file = File::open(path).unwrap();
+                    let _ = handle2.0.1.set(T::read(file));
+                });
+
                 self.storage.insert(
                     id.to_owned(),
-                    Arc::downgrade(&handle.1) as Weak<dyn Any + Send + Sync>,
+                    Arc::downgrade(&handle.0) as Weak<dyn Any + Send + Sync>,
                 );
                 handle
             }
@@ -67,35 +77,37 @@ impl Assets {
 }
 
 pub trait Asset: Any + Send + Sync {
-    fn read(data: Mmap) -> Self;
+    fn read<R: Read>(reader: R) -> Self;
 }
 
-// todo: allow downgrading handles, so gpu resource managers can free cpu assets. this could lead to having assets own vec<u8> instead of mmap
-pub struct Handle<T>(String, Arc<T>);
+pub struct Handle<T>(Arc<(String, OnceLock<T>)>);
 
 impl<T> Handle<T> {
     pub fn id(&self) -> &str {
-        &self.0
+        &self.0.0
     }
-}
 
-impl<T> ops::Deref for Handle<T> {
-    type Target = T;
+    pub fn loaded(&self) -> bool {
+        self.0.1.get().is_some()
+    }
+    pub fn try_get(&self) -> Option<&T> {
+        self.0.1.get()
+    }
 
-    fn deref(&self) -> &Self::Target {
-        &self.1
+    pub fn get(&self) -> &T {
+        self.try_get().unwrap()
     }
 }
 
 impl<T> Hash for Handle<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.hash(state)
+        self.id().hash(state)
     }
 }
 
 impl<T> PartialEq for Handle<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
+        self.id() == other.id()
     }
 }
 
@@ -103,7 +115,7 @@ impl<T> Eq for Handle<T> {}
 
 impl<T> Clone for Handle<T> {
     fn clone(&self) -> Self {
-        Handle(self.0.clone(), self.1.clone())
+        Handle(self.0.clone())
     }
 }
 

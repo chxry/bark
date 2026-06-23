@@ -1,7 +1,6 @@
 use crate::assets::{Asset, AssetProcessor, Handle};
 use image::imageops::{self, FilterType};
 use intel_tex_2::{RSurface, RgSurface, RgbaSurface, bc4, bc5, bc7};
-use memmap2::Mmap;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
@@ -109,49 +108,51 @@ impl TextureManager {
         }
 
         let mut i = 1;
-        for tex in handles {
-            if !self.asset_map.contains_key(tex.id()) {
-                debug!("upload texture {:?}", tex.id());
-                while self.slots[i].is_some() {
-                    i += 1;
-                }
+        for handle in handles {
+            if let Some(tex) = handle.try_get() {
+                if !self.asset_map.contains_key(handle.id()) {
+                    debug!("upload texture {:?}", handle.id());
+                    while self.slots[i].is_some() {
+                        i += 1;
+                    }
 
-                let mut tex_format = match tex.header.compression {
-                    CompressionFormat::Bc7 => wgpu::TextureFormat::Bc7RgbaUnorm,
-                    CompressionFormat::Bc5 => wgpu::TextureFormat::Bc5RgUnorm,
-                    CompressionFormat::Bc4 => wgpu::TextureFormat::Bc4RUnorm,
-                    CompressionFormat::None => wgpu::TextureFormat::Rgba8Unorm,
-                };
-                if tex.header.mode == TextureMode::Srgb {
-                    tex_format = tex_format.add_srgb_suffix();
-                }
+                    let mut tex_format = match tex.compression {
+                        CompressionFormat::Bc7 => wgpu::TextureFormat::Bc7RgbaUnorm,
+                        CompressionFormat::Bc5 => wgpu::TextureFormat::Bc5RgUnorm,
+                        CompressionFormat::Bc4 => wgpu::TextureFormat::Bc4RUnorm,
+                        CompressionFormat::None => wgpu::TextureFormat::Rgba8Unorm,
+                    };
+                    if tex.mode == TextureMode::Srgb {
+                        tex_format = tex_format.add_srgb_suffix();
+                    }
 
-                let texture = device.create_texture_with_data(
-                    queue,
-                    &wgpu::TextureDescriptor {
-                        size: wgpu::Extent3d {
-                            width: tex.header.width,
-                            height: tex.header.height,
-                            depth_or_array_layers: 1,
+                    let texture = device.create_texture_with_data(
+                        queue,
+                        &wgpu::TextureDescriptor {
+                            size: wgpu::Extent3d {
+                                width: tex.width,
+                                height: tex.height,
+                                depth_or_array_layers: 1,
+                            },
+                            mip_level_count: tex.mip_count as _,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: tex_format,
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                            view_formats: &[],
+                            label: None,
                         },
-                        mip_level_count: tex.header.mip_count as _,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: tex_format,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                        view_formats: &[],
-                        label: None,
-                    },
-                    wgpu::util::TextureDataOrder::default(),
-                    tex.data(),
-                );
-                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                self.slots[i] = Some(TextureSlot {
-                    asset: tex.clone(),
-                    view,
-                });
-                self.asset_map.insert(tex.id().to_owned(), i as _);
-                bindings_changed = true;
+                        wgpu::util::TextureDataOrder::default(),
+                        &tex.data,
+                    );
+                    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                    self.slots[i] = Some(TextureSlot {
+                        asset: handle.clone(),
+                        view,
+                    });
+                    self.asset_map.insert(handle.id().to_owned(), i as _);
+                    bindings_changed = true;
+                }
             }
         }
 
@@ -200,20 +201,37 @@ struct TextureSlot {
 }
 
 pub struct Texture {
-    header: TextureHeader,
-    data: Mmap,
+    width: u32,
+    height: u32,
+    mip_count: u8,
+    mode: TextureMode,
+    compression: CompressionFormat,
+    data: Vec<u8>,
 }
 
 impl Texture {
-    fn data(&self) -> &[u8] {
-        &self.data[TextureHeader::OFFSET..]
+    fn write<W: Write>(&self, mut writer: W) {
+        writer.write_all(&self.width.to_le_bytes()).unwrap();
+        writer.write_all(&self.height.to_le_bytes()).unwrap();
+        writer.write_all(&[self.mip_count]).unwrap();
+        writer.write_all(&[self.mode as u8]).unwrap();
+        writer.write_all(&[self.compression as u8]).unwrap();
+        writer.write_all(&self.data).unwrap();
     }
 }
 
 impl Asset for Texture {
-    fn read(data: Mmap) -> Self {
+    fn read<R: Read>(mut reader: R) -> Self {
+        let mut header = [0; 11];
+        let mut data = vec![];
+        reader.read_exact(&mut header).unwrap();
+        reader.read_to_end(&mut data).unwrap();
         Self {
-            header: TextureHeader::read(&*data),
+            width: u32::from_le_bytes(header[0..4].try_into().unwrap()),
+            height: u32::from_le_bytes(header[4..8].try_into().unwrap()),
+            mip_count: header[8],
+            mode: TextureMode::from_repr(header[9]).unwrap(),
+            compression: CompressionFormat::from_repr(header[10]).unwrap(),
             data,
         }
     }
@@ -238,39 +256,6 @@ pub enum CompressionFormat {
     None,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub struct TextureHeader {
-    pub width: u32,
-    pub height: u32,
-    pub mip_count: u8,
-    pub mode: TextureMode,
-    pub compression: CompressionFormat,
-}
-
-impl TextureHeader {
-    pub const OFFSET: usize = 11;
-
-    pub fn write<W: Write>(&self, mut writer: W) {
-        writer.write_all(&self.width.to_le_bytes()).unwrap();
-        writer.write_all(&self.height.to_le_bytes()).unwrap();
-        writer.write_all(&[self.mip_count]).unwrap();
-        writer.write_all(&[self.mode as u8]).unwrap();
-        writer.write_all(&[self.compression as u8]).unwrap();
-    }
-
-    pub fn read<R: Read>(mut reader: R) -> Self {
-        let mut buf = [0; 11];
-        reader.read_exact(&mut buf).unwrap();
-        Self {
-            width: u32::from_le_bytes(buf[0..4].try_into().unwrap()),
-            height: u32::from_le_bytes(buf[4..8].try_into().unwrap()),
-            mip_count: buf[8],
-            mode: TextureMode::from_repr(buf[9]).unwrap(),
-            compression: CompressionFormat::from_repr(buf[10]).unwrap(),
-        }
-    }
-}
-
 pub struct TextureProcessor;
 
 #[derive(Serialize, Deserialize)]
@@ -284,7 +269,7 @@ impl AssetProcessor for TextureProcessor {
     type Options = TextureOptions;
 
     // todo: respect TextureMode, only downsample needed channels
-    fn process<R: Read, W: Write>(&self, mut src: R, mut out: W, opts: Self::Options) {
+    fn process<R: Read, W: Write>(&self, mut src: R, out: W, opts: Self::Options) {
         let mut bytes = Vec::new();
         src.read_to_end(&mut bytes).unwrap();
 
@@ -306,34 +291,26 @@ impl AssetProcessor for TextureProcessor {
             }
         }
 
-        let header = TextureHeader {
-            width: mip_levels[0].width(),
-            height: mip_levels[0].height(),
-            mip_count: mip_levels.len() as u8,
-            mode: opts.mode,
-            compression: opts.compression,
-        };
-        header.write(&mut out);
-
-        for level in mip_levels {
-            let compressed = match opts.compression {
+        let mut data = vec![];
+        for level in &mip_levels {
+            let mip_data = match opts.compression {
                 CompressionFormat::Bc7 => &bc7::compress_blocks(
                     &bc7::opaque_ultra_fast_settings(),
                     &RgbaSurface {
-                        data: &level,
+                        data: level,
                         width: level.width(),
                         height: level.height(),
                         stride: level.width() * 4,
                     },
                 ),
                 CompressionFormat::Bc5 => &bc5::compress_blocks(&RgSurface {
-                    data: &extract_rg(&level),
+                    data: &extract_rg(level),
                     width: level.width(),
                     height: level.height(),
                     stride: level.width() * 2,
                 }),
                 CompressionFormat::Bc4 => &bc4::compress_blocks(&RSurface {
-                    data: &extract_r(&level),
+                    data: &extract_r(level),
                     width: level.width(),
                     height: level.height(),
                     stride: level.width(),
@@ -341,8 +318,18 @@ impl AssetProcessor for TextureProcessor {
 
                 CompressionFormat::None => level.as_raw(),
             };
-            out.write_all(compressed).unwrap();
+            data.extend(mip_data);
         }
+
+        let texture = Texture {
+            width: mip_levels[0].width(),
+            height: mip_levels[0].height(),
+            mip_count: mip_levels.len() as u8,
+            mode: opts.mode,
+            compression: opts.compression,
+            data,
+        };
+        texture.write(out);
     }
 }
 
