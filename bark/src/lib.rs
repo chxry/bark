@@ -9,6 +9,7 @@ use std::hash::{Hash, Hasher};
 use std::{fmt, mem, slice};
 
 pub use app::App;
+pub use glam as math;
 
 #[derive(Eq, Copy, Clone)]
 pub struct TypeKey {

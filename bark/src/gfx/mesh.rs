@@ -1,6 +1,21 @@
-use crate::assets::AssetProcessor;
-use glam::{Vec2, Vec3, Vec4};
+use crate::assets::{Asset, AssetProcessor};
+use crate::math::{Vec2, Vec3, Vec4};
+use memmap2::Mmap;
 use std::io::{BufReader, Read, Write};
+
+pub struct Mesh {
+    pub header: MeshHeader,
+    pub data: Mmap,
+}
+
+impl Asset for Mesh {
+    fn read(data: Mmap) -> Self {
+        Self {
+            header: MeshHeader::read(&*data),
+            data,
+        }
+    }
+}
 
 #[repr(C)]
 #[derive(Copy, Clone)]

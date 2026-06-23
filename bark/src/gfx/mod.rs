@@ -6,6 +6,7 @@ use self::texture::TextureProcessor;
 use crate::app::{self, App, ResizeEvent, WindowHandle};
 use crate::assets::AssetProcessors;
 use crate::ecs::{Commands, Events, IntoSystem, MainThread, Res, ResMut};
+use crate::gfx::texture::TextureManager;
 use tracing::error;
 
 const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
@@ -15,16 +16,12 @@ pub fn init(app: &mut App) {
     app.world.insert_system(app::Render, begin_frame);
     app.world
         .insert_system(app::Render, submit_frame.after(begin_frame));
-    app.world.insert_system(
-        app::Render,
-        main_pass.after(begin_frame).before(submit_frame),
-    )
 }
 
 pub struct RenderContext {
-    surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    pub surface: wgpu::Surface<'static>,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
 }
 
 pub fn init_renderer(window: Res<WindowHandle>, mut commands: Commands, _: MainThread) {
@@ -38,28 +35,35 @@ pub fn init_renderer(window: Res<WindowHandle>, mut commands: Commands, _: MainT
     .unwrap();
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: None,
-        required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::defaults(),
+        required_features: wgpu::Features::TEXTURE_BINDING_ARRAY
+            | wgpu::Features::TEXTURE_COMPRESSION_BC,
+        required_limits: wgpu::Limits {
+            max_binding_array_elements_per_shader_stage: 2048,
+            ..Default::default()
+        },
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: wgpu::MemoryHints::Performance,
         trace: wgpu::Trace::Off,
     }))
     .unwrap();
 
+    let textures = TextureManager::new(&device, &queue);
+
     commands.insert_resource(RenderContext {
         surface,
         device,
         queue,
     });
+    commands.insert_resource(textures);
     commands.insert_resource(None as RenderFrame);
 }
 
 pub type RenderFrame = Option<RenderFrameInner>;
 
 pub struct RenderFrameInner {
-    surface: wgpu::SurfaceTexture,
-    surface_view: wgpu::TextureView,
-    encoder: wgpu::CommandEncoder,
+    pub surface: wgpu::SurfaceTexture,
+    pub surface_view: wgpu::TextureView,
+    pub encoder: wgpu::CommandEncoder,
 }
 
 pub fn begin_frame(
@@ -103,36 +107,6 @@ pub fn begin_frame(
         surface_view,
         encoder,
     });
-}
-
-pub fn main_pass(mut frame: ResMut<RenderFrame>) {
-    let Some(frame) = (*frame).as_mut() else {
-        return;
-    };
-
-    let main_pass = frame
-        .encoder
-        .begin_render_pass(&wgpu::RenderPassDescriptor {
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &frame.surface_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.5,
-                        g: 0.6,
-                        b: 0.8,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-            label: None,
-        });
 }
 
 pub fn submit_frame(ctx: Res<RenderContext>, mut frame: ResMut<RenderFrame>) {

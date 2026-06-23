@@ -6,7 +6,7 @@ use std::iter::Peekable;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{mem, ops, ptr, slice};
-use tracing::trace;
+use tracing::{debug, trace};
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct EntityId(u64);
@@ -72,7 +72,7 @@ impl World {
 
     pub fn insert_resource<T: Any + Send + Sync>(&mut self, data: T) {
         let id = TypeKey::of::<T>();
-        trace!("insert resource {:?}", id);
+        debug!("insert resource {:?}", id);
 
         self.resources.insert(id, Box::new(data));
     }
@@ -151,7 +151,7 @@ pub struct ComponentStore<T> {
 
 impl<T> ComponentStore<T> {
     fn new() -> Self {
-        trace!("new component type {:?}", any::type_name::<T>());
+        debug!("new component type {:?}", any::type_name::<T>());
         Self {
             entities: vec![],
             data: vec![],
@@ -224,7 +224,7 @@ pub struct EventStore<T> {
 
 impl<T> EventStore<T> {
     fn new() -> Self {
-        trace!("new event type {:?}", any::type_name::<T>());
+        debug!("new event type {:?}", any::type_name::<T>());
         Self {
             current: vec![],
             queued: vec![],
@@ -809,13 +809,15 @@ impl SystemParam for Commands<'_> {
 pub struct EntityCommands<'w>(&'w mut CommandBuffer, EntityId);
 
 impl EntityCommands<'_> {
-    pub fn insert<T: Any + Send + Sync>(&mut self, data: T) {
+    pub fn insert<T: Any + Send + Sync>(&mut self, data: T) -> &mut Self {
         self.0.push(Box::new(InsertComponentCommand(data, self.1)));
+        self
     }
 
-    pub fn remove<T: Any + Send + Sync>(&mut self) {
+    pub fn remove<T: Any + Send + Sync>(&mut self) -> &mut Self {
         self.0
             .push(Box::new(RemoveComponentCommand(PhantomData::<T>, self.1)));
+        self
     }
 
     pub fn despawn(self) {

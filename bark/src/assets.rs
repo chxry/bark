@@ -3,6 +3,7 @@ use memmap2::Mmap;
 use rayon::prelude::*;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::any::Any;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
@@ -23,7 +24,7 @@ pub fn init<P: Into<PathBuf>>(app: &mut App, assets_dir: P) {
 pub struct Assets {
     manifest: Manifest,
     cache_dir: PathBuf,
-    storage: HashMap<String, Weak<Mmap>>,
+    storage: HashMap<String, Weak<dyn Any + Send + Sync>>,
 }
 
 impl Assets {
@@ -40,36 +41,69 @@ impl Assets {
         }
     }
 
-    pub fn load(&mut self, id: &str) -> Handle {
+    pub fn load<T: Asset>(&mut self, id: &str) -> Handle<T> {
         match self.storage.get(id).and_then(|h| h.upgrade()) {
-            Some(h) => Handle(h),
+            Some(h) => Handle(id.to_owned(), h.downcast().unwrap()),
             None => {
+                debug!("load asset {:?}", id);
                 let entry = self.manifest.0.get(id).unwrap();
-                let map = Arc::new(
-                    // safety: we're not modifying the asset files, so not our problem
-                    unsafe {
-                        Mmap::map(
-                            &File::open(self.cache_dir.join(hex::encode(entry.hash.to_be_bytes())))
-                                .unwrap(),
-                        )
-                    }
-                    .unwrap(),
+                // safety: we're not modifying the asset files, so not our problem
+                let map = unsafe {
+                    Mmap::map(
+                        &File::open(self.cache_dir.join(hex::encode(entry.hash.to_be_bytes())))
+                            .unwrap(),
+                    )
+                }
+                .unwrap();
+                let handle = Handle(id.to_owned(), Arc::new(T::read(map)));
+                self.storage.insert(
+                    id.to_owned(),
+                    Arc::downgrade(&handle.1) as Weak<dyn Any + Send + Sync>,
                 );
-                self.storage.insert(id.to_owned(), Arc::downgrade(&map));
-                Handle(map)
+                handle
             }
         }
     }
 }
 
-#[derive(Clone)]
-pub struct Handle(Arc<Mmap>);
+pub trait Asset: Any + Send + Sync {
+    fn read(data: Mmap) -> Self;
+}
 
-impl ops::Deref for Handle {
-    type Target = [u8];
+// todo: allow downgrading handles, so gpu resource managers can free cpu assets. this could lead to having assets own vec<u8> instead of mmap
+pub struct Handle<T>(String, Arc<T>);
+
+impl<T> Handle<T> {
+    pub fn id(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<T> ops::Deref for Handle<T> {
+    type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.1
+    }
+}
+
+impl<T> Hash for Handle<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state)
+    }
+}
+
+impl<T> PartialEq for Handle<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<T> Eq for Handle<T> {}
+
+impl<T> Clone for Handle<T> {
+    fn clone(&self) -> Self {
+        Handle(self.0.clone(), self.1.clone())
     }
 }
 
