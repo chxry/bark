@@ -5,17 +5,21 @@ use self::mesh::MeshProcessor;
 use self::texture::TextureProcessor;
 use crate::app::{self, App, ResizeEvent, WindowHandle};
 use crate::assets::AssetProcessors;
-use crate::ecs::{Commands, Events, IntoSystem, MainThread, Res, ResMut};
+use crate::ecs::{Commands, IntoSystem, MainThread, Observer, Res, ResMut};
 use crate::gfx::texture::TextureManager;
 use tracing::error;
 
 const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
 
 pub fn init(app: &mut App) {
-    app.world.insert_system(app::Startup, init_renderer);
-    app.world.insert_system(app::Render, begin_frame);
     app.world
-        .insert_system(app::Render, submit_frame.after(begin_frame));
+        .insert_system::<app::Startup>(init_renderer.into_system());
+    app.world
+        .insert_system::<app::Render>(begin_frame.into_system());
+    app.world
+        .insert_system::<app::Render>(submit_frame.after(begin_frame));
+    app.world
+        .insert_system::<app::ResizeEvent>(on_resize.into_system());
 }
 
 pub struct RenderContext {
@@ -47,6 +51,9 @@ pub fn init_renderer(window: Res<WindowHandle>, mut commands: Commands, _: MainT
     }))
     .unwrap();
 
+    let size = window.inner_size();
+    configure_surface(&device, &surface, size.width, size.height);
+
     let textures = TextureManager::new(&device, &queue);
 
     commands.insert_resource(RenderContext {
@@ -66,26 +73,10 @@ pub struct RenderFrameInner {
     pub encoder: wgpu::CommandEncoder,
 }
 
-pub fn begin_frame(
-    ctx: Res<RenderContext>,
-    mut frame: ResMut<RenderFrame>,
-    resize_events: Events<ResizeEvent>,
-) {
-    if let Some(event) = resize_events.iter().last() {
-        ctx.surface.configure(
-            &ctx.device,
-            &wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                format: SURFACE_FORMAT,
-                width: event.width,
-                height: event.height,
-                present_mode: wgpu::PresentMode::AutoVsync,
-                desired_maximum_frame_latency: 2,
-                alpha_mode: wgpu::CompositeAlphaMode::Auto,
-                view_formats: vec![],
-            },
-        );
-    }
+pub fn begin_frame(ctx: Res<RenderContext>, mut frame: ResMut<RenderFrame>) {
+    // if let Some(event) = resize_events.iter().last() {
+    //     configure_surface(&ctx.device, &ctx.surface, event.width, event.height);
+    // }
 
     let surface = match ctx.surface.get_current_texture() {
         wgpu::CurrentSurfaceTexture::Success(surface) => surface,
@@ -116,6 +107,26 @@ pub fn submit_frame(ctx: Res<RenderContext>, mut frame: ResMut<RenderFrame>) {
 
     ctx.queue.submit([frame.encoder.finish()]);
     frame.surface.present();
+}
+
+fn configure_surface(device: &wgpu::Device, surface: &wgpu::Surface, width: u32, height: u32) {
+    surface.configure(
+        device,
+        &wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: SURFACE_FORMAT,
+            width,
+            height,
+            present_mode: wgpu::PresentMode::AutoVsync,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: vec![],
+        },
+    );
+}
+
+pub fn on_resize(ctx: Res<RenderContext>, resize: Observer<ResizeEvent>) {
+    configure_surface(&ctx.device, &ctx.surface, resize.width, resize.height);
 }
 
 pub fn init_build(assets: &mut AssetProcessors) {

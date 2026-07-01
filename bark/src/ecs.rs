@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::iter::Peekable;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::{mem, ops, ptr, slice};
+use std::{ops, ptr};
 use tracing::{debug, trace_span};
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
@@ -14,7 +14,6 @@ pub struct EntityId(u64);
 pub struct World {
     entity_id: AtomicU64,
     component_stores: HashMap<TypeKey, Box<dyn ErasedComponentStore>>,
-    event_stores: HashMap<TypeKey, Box<dyn ErasedEventStore>>,
     resources: HashMap<TypeKey, Box<dyn Any + Send + Sync>>,
     schedules: HashMap<TypeKey, Schedule>,
 }
@@ -25,7 +24,6 @@ impl World {
         Self {
             entity_id: AtomicU64::new(0),
             component_stores: HashMap::new(),
-            event_stores: HashMap::new(),
             resources: HashMap::new(),
             schedules: HashMap::new(),
         }
@@ -52,24 +50,6 @@ impl World {
             .unwrap()
     }
 
-    pub fn get_event_store<T: Any + Send + Sync>(&self) -> Option<&EventStore<T>> {
-        (self.event_stores.get(&TypeKey::of::<T>())?.as_ref() as &dyn Any).downcast_ref()
-    }
-
-    pub fn get_event_store_mut<T: Any + Send + Sync>(&mut self) -> Option<&mut EventStore<T>> {
-        (self.event_stores.get_mut(&TypeKey::of::<T>())?.as_mut() as &mut dyn Any).downcast_mut()
-    }
-
-    pub fn create_event_store<T: Any + Send + Sync>(&mut self) -> &mut EventStore<T> {
-        (self
-            .event_stores
-            .entry(TypeKey::of::<T>())
-            .or_insert_with(|| Box::new(EventStore::<T>::new()))
-            .as_mut() as &mut dyn Any)
-            .downcast_mut()
-            .unwrap()
-    }
-
     pub fn insert_resource<T: Any + Send + Sync>(&mut self, data: T) {
         let id = TypeKey::of::<T>();
         debug!("insert resource {:?}", id);
@@ -91,19 +71,19 @@ impl World {
             .map(|x| *x.downcast().unwrap())
     }
 
-    pub fn insert_system<T: Any, S: IntoSystem<P>, P>(&mut self, _: T, sys: S) {
+    pub fn insert_system<T: Any>(&mut self, sys: Box<dyn System>) {
         let id = TypeKey::of::<T>();
         self.schedules
             .entry(id)
             .or_insert_with(Schedule::new)
-            .add(sys.into_system());
+            .add(sys);
     }
 
-    pub fn run_schedule<T: Any>(&mut self, _: T) {
+    pub fn run_schedule<T: Any + Send + Sync>(&mut self, event: T) {
         let id = TypeKey::of::<T>();
         let _span = trace_span!("phase", name = ?id).entered();
         if let Some(mut schedule) = self.schedules.remove(&id) {
-            schedule.run(self);
+            schedule.run(self, &event);
             // todo this is kinda weird
             self.schedules.insert(id, schedule);
         }
@@ -126,16 +106,6 @@ impl World {
 
     pub fn remove_component<T: Any + Send + Sync>(&mut self, entity: EntityId) -> Option<T> {
         self.get_component_store_mut()?.remove(entity)
-    }
-
-    pub fn clear_events(&mut self) {
-        for store in self.event_stores.values_mut() {
-            store.swap_buffers();
-        }
-    }
-
-    pub fn queue_event<T: Any + Send + Sync>(&mut self, event: T) {
-        self.create_event_store::<T>().queue(event);
     }
 }
 
@@ -213,40 +183,6 @@ impl<T: Any + Send + Sync> ErasedComponentStore for ComponentStore<T> {
     }
 }
 
-trait ErasedEventStore: Any + Send + Sync {
-    fn swap_buffers(&mut self);
-}
-
-pub struct EventStore<T> {
-    current: Vec<T>,
-    queued: Vec<T>,
-}
-
-impl<T> EventStore<T> {
-    fn new() -> Self {
-        debug!("new event type {:?}", any::type_name::<T>());
-        Self {
-            current: vec![],
-            queued: vec![],
-        }
-    }
-
-    fn queue(&mut self, event: T) {
-        self.queued.push(event);
-    }
-
-    fn current(&self) -> &[T] {
-        &self.current
-    }
-}
-
-impl<T: Any + Send + Sync> ErasedEventStore for EventStore<T> {
-    fn swap_buffers(&mut self) {
-        self.current.clear();
-        mem::swap(&mut self.current, &mut self.queued);
-    }
-}
-
 struct Schedule {
     systems: Vec<Box<dyn System>>,
     layers: Option<Vec<Vec<usize>>>,
@@ -265,7 +201,7 @@ impl Schedule {
         self.layers = None;
     }
 
-    pub fn run(&mut self, world: &mut World) {
+    pub fn run(&mut self, world: &mut World, event: &(dyn Any + Send + Sync)) {
         if self.layers.is_none() {
             self.layers = Some(self.build_layers());
         }
@@ -274,13 +210,15 @@ impl Schedule {
             // safety: we trust layers to be setup correctly to ensure safe access
             unsafe {
                 if layer.len() == 1 {
-                    self.systems[layer[0]].run(ptr::from_mut(world));
+                    self.systems[layer[0]].run(ptr::from_mut(world), event);
                 } else {
                     rayon::scope(|s| {
                         let world_ptr = ptr::from_mut(world) as usize;
                         for &i in layer {
                             let sys = &raw mut self.systems[i] as usize;
-                            s.spawn(move |_| (*(sys as *mut Box<dyn System>)).run(world_ptr as _));
+                            s.spawn(move |_| {
+                                (*(sys as *mut Box<dyn System>)).run(world_ptr as _, event)
+                            });
                         }
                     });
                 }
@@ -394,7 +332,7 @@ pub trait System: Send + Sync {
     fn get_meta(&self) -> &SystemMeta;
     fn get_meta_mut(&mut self) -> &mut SystemMeta;
     /// safety: must only be called according to `SystemMeta`
-    unsafe fn run(&mut self, world: *mut World);
+    unsafe fn run(&mut self, world: *mut World, event: &dyn Any);
     fn flush(&mut self, world: &mut World);
 }
 
@@ -432,7 +370,6 @@ impl IntoSystem<()> for Box<dyn System> {
     }
 }
 
-// enum inside the sets could shrink memory usage
 pub struct SystemMeta {
     type_id: TypeKey,
     component_access: HashMap<TypeKey, Access>,
@@ -501,7 +438,7 @@ trait SystemParam: Sized {
     fn init(meta: &mut SystemMeta) -> Self::State;
     /// safety: must only be called according to `init`
     /// todo: whatever the `SystemParam`s do with these pointers can leak. safety is guaranteed during the system, however users of `SystemParam` and descendents are currently trusted to not do anything silly
-    unsafe fn fetch(world: *mut World, state: *mut Self::State) -> Self;
+    unsafe fn fetch(world: *mut World, state: *mut Self::State, event: &dyn Any) -> Self;
     fn flush(_: &mut World, _: &mut Self::State) {}
 }
 
@@ -512,12 +449,12 @@ macro_rules! impl_system {
             fn get_meta_mut(&mut self) -> &mut SystemMeta { &mut self.meta }
 
             #[allow(unused)]
-            unsafe fn run(&mut self, world: *mut World) {
+            unsafe fn run(&mut self, world: *mut World, event: &dyn Any) {
                 let _span = trace_span!("system", name = ?self.meta.type_id).entered();
                 // safety: responsibility is on the caller
                 unsafe {
                     $(
-                        let $P = $P::fetch(world, ptr::from_mut(&mut self.state.$n));
+                        let $P = $P::fetch(world, ptr::from_mut(&mut self.state.$n), event);
                     )*
                     (self.f)($($P),*);
                 }
@@ -565,7 +502,7 @@ impl<T: Any + Send + Sync> SystemParam for Res<'_, T> {
         meta.resource_access.insert(id, Access::Read);
     }
 
-    unsafe fn fetch(world: *mut World, _: *mut Self::State) -> Self {
+    unsafe fn fetch(world: *mut World, _: *mut Self::State, _: &dyn Any) -> Self {
         // safety: we requested this in `init`
         Self(unsafe { (*world).get_resource() }.unwrap())
     }
@@ -601,7 +538,7 @@ impl<T: Any + Send + Sync> SystemParam for ResMut<'_, T> {
         meta.resource_access.insert(id, Access::Write);
     }
 
-    unsafe fn fetch(world: *mut World, _: *mut Self::State) -> Self {
+    unsafe fn fetch(world: *mut World, _: *mut Self::State, _: &dyn Any) -> Self {
         // safety: we requested this in `init`
         Self(unsafe { (*world).get_resource_mut() }.unwrap())
     }
@@ -636,7 +573,7 @@ impl SystemParam for MainThread {
         meta.exclusive = true;
     }
 
-    unsafe fn fetch(_: *mut World, _: *mut Self::State) -> Self {
+    unsafe fn fetch(_: *mut World, _: *mut Self::State, _: &dyn Any) -> Self {
         Self
     }
 }
@@ -673,7 +610,7 @@ macro_rules! impl_query {
                 )*
             }
 
-            unsafe fn fetch(world: *mut World,  _: *mut Self::State) -> Self {
+            unsafe fn fetch(world: *mut World,  _: *mut Self::State,  _: &dyn Any) -> Self {
                 Self {
                     world,
                     params: PhantomData
@@ -782,8 +719,8 @@ impl Commands<'_> {
         self.1.push(Box::new(InsertResourceCommand(data)));
     }
 
-    pub fn queue_event<T: Any + Send + Sync>(&mut self, event: T) {
-        self.1.push(Box::new(QueueEventCommand(event)));
+    pub fn run_schedule<T: Any + Send + Sync>(&mut self, event: T) {
+        self.1.push(Box::new(RunScheduleCommand(event)));
     }
 }
 
@@ -794,7 +731,7 @@ impl SystemParam for Commands<'_> {
         CommandBuffer::new()
     }
 
-    unsafe fn fetch(world: *mut World, state: *mut Self::State) -> Self {
+    unsafe fn fetch(world: *mut World, state: *mut Self::State, _: &dyn Any) -> Self {
         // safety: 'w is bs, see trait commment. we only use `World.entity_id`
         unsafe { Self(&*world, &mut *state) }
     }
@@ -861,29 +798,35 @@ impl<T: Any + Send + Sync> Command for InsertResourceCommand<T> {
     }
 }
 
-struct QueueEventCommand<T>(T);
+struct RunScheduleCommand<T>(T);
 
-impl<T: Any + Send + Sync> Command for QueueEventCommand<T> {
+impl<T: Any + Send + Sync> Command for RunScheduleCommand<T> {
     fn apply(self: Box<Self>, world: &mut World) {
-        world.queue_event(self.0)
+        world.run_schedule(self.0)
     }
 }
 
-pub struct Events<'w, T>(Option<&'w [T]>);
+pub struct Observer<'w, T>(&'w T);
 
-impl<'w, T> Events<'w, T> {
-    pub fn iter(&self) -> slice::Iter<'w, T> {
-        self.0.unwrap_or(&[]).iter()
-    }
-}
-
-impl<T: Any + Send + Sync> SystemParam for Events<'_, T> {
+impl<T: Any> SystemParam for Observer<'_, T> {
     type State = ();
 
     fn init(_: &mut SystemMeta) {}
 
-    unsafe fn fetch(world: *mut World, _: *mut Self::State) -> Self {
-        // safety: event stores are safe to access
-        Self(unsafe { (*world).get_event_store() }.map(|x| x.current()))
+    unsafe fn fetch(_: *mut World, _: *mut Self::State, event: &dyn Any) -> Self {
+        Self(
+            // safety: hopefully implementing unsafecell will give us a lifetime here
+            unsafe { &*(event as *const dyn Any) }
+                .downcast_ref()
+                .unwrap(),
+        )
+    }
+}
+
+impl<T> ops::Deref for Observer<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
     }
 }

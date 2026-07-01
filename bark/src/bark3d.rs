@@ -30,10 +30,8 @@ pub struct RenderObject {
 }
 
 pub fn init(app: &mut App) {
-    app.world.insert_system(
-        app::Render,
-        main_pass.after(gfx::begin_frame).before(gfx::submit_frame),
-    );
+    app.world
+        .insert_system::<app::Render>(main_pass.after(gfx::begin_frame).before(gfx::submit_frame));
 }
 
 pub fn main_pass(

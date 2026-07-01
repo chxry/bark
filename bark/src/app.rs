@@ -62,23 +62,22 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => self.world.queue_event(ResizeEvent {
+            WindowEvent::Resized(size) => self.world.run_schedule(ResizeEvent {
                 width: size.width,
                 height: size.height,
             }),
-            WindowEvent::RedrawRequested => {}
+            WindowEvent::RedrawRequested => {
+                self.world.run_schedule(Update);
+                self.world.run_schedule(Render);
+
+                #[cfg(feature = "tracy")]
+                tracy_client::frame_mark();
+            }
             _ => {}
         }
     }
 
     fn about_to_wait(&mut self, _: &ActiveEventLoop) {
-        self.world.clear_events(); // todo: this is not sustainable. fixed timestep loop ruins this
-        self.world.run_schedule(Update);
-        self.world.run_schedule(Render);
-
-        #[cfg(feature = "tracy")]
-        tracy_client::frame_mark();
-
         if let Some(window) = self.world.get_resource::<WindowHandle>() {
             window.request_redraw();
         }
