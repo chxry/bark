@@ -1,9 +1,17 @@
 use crate::ecs::World;
 use std::sync::Arc;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
+
+#[cfg(feature = "tracy")]
+#[global_allocator]
+static GLOBAL: tracy_client::ProfiledAllocator<std::alloc::System> =
+    tracy_client::ProfiledAllocator::new(std::alloc::System, 100);
 
 pub struct Startup;
 pub struct Update;
@@ -17,6 +25,18 @@ pub struct App {
 
 impl App {
     pub fn new() -> Self {
+        let registry = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer().with_filter(
+                EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::new("info,bark=debug")),
+            ),
+        );
+
+        #[cfg(feature = "tracy")]
+        let registry = registry.with(tracing_tracy::TracyLayer::default());
+
+        registry.init();
+
         Self {
             world: World::new(),
         }
@@ -52,9 +72,13 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _: &ActiveEventLoop) {
-        self.world.clear_events();
+        self.world.clear_events(); // todo: this is not sustainable. fixed timestep loop ruins this
         self.world.run_schedule(Update);
         self.world.run_schedule(Render);
+
+        #[cfg(feature = "tracy")]
+        tracy_client::frame_mark();
+
         if let Some(window) = self.world.get_resource::<WindowHandle>() {
             window.request_redraw();
         }

@@ -79,7 +79,7 @@ pub fn begin_frame(
                 format: SURFACE_FORMAT,
                 width: event.width,
                 height: event.height,
-                present_mode: wgpu::PresentMode::Immediate,
+                present_mode: wgpu::PresentMode::AutoVsync,
                 desired_maximum_frame_latency: 2,
                 alpha_mode: wgpu::CompositeAlphaMode::Auto,
                 view_formats: vec![],

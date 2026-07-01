@@ -2,14 +2,14 @@ use crate::App;
 use rayon::prelude::*;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::any::Any;
+use std::any::{self, Any};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, Weak};
-use tracing::debug;
+use tracing::{debug, trace_span};
 use twox_hash::XxHash3_64;
 
 const MANIFEST_FILE: &str = "manifest.json";
@@ -62,8 +62,9 @@ impl Assets {
 
                 let handle2 = handle.clone();
                 self.thread_pool.spawn(move || {
-                    let file = File::open(path).unwrap();
-                    let _ = handle2.0.1.set(T::read(file));
+                    let _span =
+                        trace_span!("load asset", id = handle2.id(), type = any::type_name::<T>());
+                    handle2.set(T::read(File::open(path).unwrap()));
                 });
 
                 self.storage.insert(
@@ -90,12 +91,17 @@ impl<T> Handle<T> {
     pub fn loaded(&self) -> bool {
         self.0.1.get().is_some()
     }
+
     pub fn try_get(&self) -> Option<&T> {
         self.0.1.get()
     }
 
     pub fn get(&self) -> &T {
         self.try_get().unwrap()
+    }
+
+    fn set(&self, data: T) {
+        let _ = self.0.1.set(data);
     }
 }
 

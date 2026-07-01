@@ -6,7 +6,7 @@ use std::iter::Peekable;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{mem, ops, ptr, slice};
-use tracing::{debug, trace};
+use tracing::{debug, trace_span};
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct EntityId(u64);
@@ -101,7 +101,7 @@ impl World {
 
     pub fn run_schedule<T: Any>(&mut self, _: T) {
         let id = TypeKey::of::<T>();
-        trace!("run phase {:?}", id);
+        let _span = trace_span!("phase", name = ?id).entered();
         if let Some(mut schedule) = self.schedules.remove(&id) {
             schedule.run(self);
             // todo this is kinda weird
@@ -513,12 +513,12 @@ macro_rules! impl_system {
 
             #[allow(unused)]
             unsafe fn run(&mut self, world: *mut World) {
+                let _span = trace_span!("system", name = ?self.meta.type_id).entered();
                 // safety: responsibility is on the caller
                 unsafe {
                     $(
                         let $P = $P::fetch(world, ptr::from_mut(&mut self.state.$n));
                     )*
-                    trace!("run system {:?}", self.meta.type_id.name);
                     (self.f)($($P),*);
                 }
             }

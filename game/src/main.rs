@@ -2,7 +2,6 @@ use bark::assets::{AssetProcessors, Assets};
 use bark::bark3d::{self, RenderObject, Transform};
 use bark::ecs::{Commands, ResMut};
 use bark::{app, assets, gfx};
-use tracing_subscriber::EnvFilter;
 
 // move out of game crate
 fn process_assets() {
@@ -12,13 +11,7 @@ fn process_assets() {
 }
 
 fn main() {
-    // process_assets();
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,bark=debug")),
-        )
-        .init();
-
+    process_assets();
     let mut app = bark::App::new();
     gfx::init(&mut app);
     assets::init(&mut app, env!("CARGO_MANIFEST_DIR").to_owned() + "/assets");
