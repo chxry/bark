@@ -1,6 +1,9 @@
 use bark::assets::{AssetProcessors, Assets};
-use bark::bark3d::{self, RenderObject, Transform};
-use bark::ecs::{Commands, IntoSystem, Observer, ResMut};
+use bark::bark3d::{self, Camera, DirectionalLight, RenderObject, Transform};
+use bark::ecs::{Commands, IntoSystem, Query, ResMut};
+use bark::gfx::mesh::MeshManager;
+use bark::gfx::texture::TextureManager;
+use bark::math::{Quat, Vec3};
 use bark::{app, assets, gfx};
 
 // move out of game crate
@@ -16,33 +19,99 @@ fn main() {
     gfx::init(&mut app);
     assets::init(&mut app, env!("CARGO_MANIFEST_DIR").to_owned() + "/assets");
     bark3d::init(&mut app);
-    app.world.insert_system::<app::Startup>(spawn.into_system());
     app.world
-        .insert_system::<TestEvent>(handle_test.into_system());
-
+        .insert_system::<app::Startup>(scene2.into_system());
+    app.world.insert_system::<app::Update>(spinny.into_system());
     app.run();
 }
 
-struct TestEvent(i32);
+struct Spin;
 
-fn spawn(mut assets: ResMut<Assets>, mut commands: Commands) {
+fn scene(
+    mut assets: ResMut<Assets>,
+    mut textures: ResMut<TextureManager>,
+    mut meshes: ResMut<MeshManager>,
+    mut commands: Commands,
+) {
     commands
         .spawn()
         .insert(Transform::default())
-        .insert(RenderObject {
-            mesh: assets.load("potted_plant_02_leaves.obj"),
-            texture: assets.load("potted_plant_02_leaves_diff_4k.png"),
-        });
+        .insert(
+            RenderObject::new(meshes.add(assets.load("potted_plant_02_leaves.obj")))
+                .diffuse_texture(textures.add(assets.load("potted_plant_02_leaves_diff_4k.png")))
+                .normal_texture(textures.add(assets.load("potted_plant_02_leaves_nor_gl_4k.png")))
+                .pbr_texture(textures.add(assets.load("potted_plant_02_leaves_arm_4k.png"))),
+        )
+        .insert(Spin);
     commands
         .spawn()
         .insert(Transform::default())
-        .insert(RenderObject {
-            mesh: assets.load("potted_plant_02_pot.obj"),
-            texture: assets.load("potted_plant_02_pot_diff_4k.png"),
-        });
-    commands.run_schedule(TestEvent(5));
+        .insert(
+            RenderObject::new(meshes.add(assets.load("potted_plant_02_pot.obj")))
+                .diffuse_texture(textures.add(assets.load("potted_plant_02_pot_diff_4k.png")))
+                .normal_texture(textures.add(assets.load("potted_plant_02_pot_nor_gl_4k.png")))
+                .pbr_texture(textures.add(assets.load("potted_plant_02_pot_arm_4k.png"))),
+        )
+        .insert(Spin);
+    commands
+        .spawn()
+        .insert(Transform::default().rotation(Quat::from_rotation_y(1.25)))
+        .insert(DirectionalLight {});
+    commands
+        .spawn()
+        .insert(Transform::default().position(Vec3::new(0.0, 1.5, 5.0)))
+        .insert(Camera::new(1.0));
 }
 
-fn handle_test(event: Observer<TestEvent>) {
-    tracing::info!("bingo! {}", event.0);
+fn scene2(mut assets: ResMut<Assets>, mut meshes: ResMut<MeshManager>, mut commands: Commands) {
+    let sphere_mesh = meshes.add(assets.load("sphere.obj"));
+
+    let rows = 10;
+    let cols = 10;
+    let spacing = 1.25;
+    let scale = 0.5;
+
+    for y in 0..rows {
+        for x in 0..cols {
+            let roughness = x as f32 / (rows - 1) as f32;
+            let metallic = 1.0 - y as f32 / (cols - 1) as f32;
+
+            commands
+                .spawn()
+                .insert(
+                    Transform::default()
+                        .position(Vec3::new(x as f32 * spacing, y as f32 * spacing, 0.0))
+                        .scale(Vec3::splat(scale)),
+                )
+                .insert(
+                    RenderObject::new(sphere_mesh)
+                        .diffuse_color(Vec3::X)
+                        .pbr_values(roughness, metallic),
+                );
+        }
+    }
+
+    commands
+        .spawn()
+        .insert(Transform::default().position(Vec3::new(
+            (rows as f32 / 2.0) * spacing - scale,
+            (cols as f32 / 2.0) * spacing - scale,
+            10.0,
+        )))
+        .insert(Camera::new(1.2));
+    commands
+        .spawn()
+        .insert(Transform::default().rotation(Quat::from_rotation_y(1.25)))
+        .insert(DirectionalLight {});
+    commands
+        .spawn()
+        .insert(Transform::default())
+        .insert(DirectionalLight {})
+        .insert(Spin);
+}
+
+fn spinny(mut transforms: Query<(&mut Transform, &Spin)>) {
+    for (_, (t, _)) in transforms.iter() {
+        t.rotation *= Quat::from_rotation_y(0.01);
+    }
 }

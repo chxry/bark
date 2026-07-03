@@ -1,25 +1,28 @@
+use super::RenderContext;
 use crate::assets::{Asset, AssetProcessor, Handle};
+use crate::ecs::{Res, ResMut};
 use image::imageops::{self, FilterType};
 use intel_tex_2::{RSurface, RgSurface, RgbaSurface, bc4, bc5, bc7};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::num::NonZero;
 use strum::FromRepr;
 use tracing::{debug, error};
 use wgpu::util::DeviceExt;
 
-type TextureSlotIndex = u32;
+#[derive(Copy, Clone)]
+pub struct TextureHandle(u32);
 
-pub const MAX_BOUND_TEXTURES: TextureSlotIndex = 2048;
+pub const MAX_BOUND_TEXTURES: u32 = 2048;
 
 pub struct TextureManager {
     undefined_texture_view: wgpu::TextureView,
-    layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    bind_group: wgpu::BindGroup,
-    slots: [Option<TextureSlot>; MAX_BOUND_TEXTURES as _],
-    asset_map: HashMap<String, TextureSlotIndex>,
+    pub layout: wgpu::BindGroupLayout,
+    pub bind_group: wgpu::BindGroup,
+    slots: [TextureSlot; MAX_BOUND_TEXTURES as _],
+    asset_map: HashMap<String, TextureHandle>,
 }
 
 impl TextureManager {
@@ -45,6 +48,7 @@ impl TextureManager {
         );
         let undefined_texture_view =
             undefined_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
 
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
@@ -67,92 +71,85 @@ impl TextureManager {
                 },
             ],
         });
-        let slots = [const { None }; MAX_BOUND_TEXTURES as _];
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+        let mut slots = [const { TextureSlot::Empty }; MAX_BOUND_TEXTURES as _];
+        slots[0] = TextureSlot::Reserved;
         let bind_group =
             Self::build_bind_group(device, &layout, &sampler, &slots, &undefined_texture_view);
 
         Self {
             undefined_texture_view,
-            layout,
             sampler,
+            layout,
             bind_group,
             slots,
             asset_map: HashMap::new(),
         }
     }
 
-    pub fn process_sources(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        handles: HashSet<Handle<Texture>>,
-    ) {
-        if handles.len() > MAX_BOUND_TEXTURES as _ {
-            error!(
-                "amount of bound textures exceeds limit ({} > {})",
-                handles.len(),
-                MAX_BOUND_TEXTURES
-            );
-            return;
-        }
+    pub fn add(&mut self, handle: Handle<Texture>) -> TextureHandle {
+        *self
+            .asset_map
+            .entry(handle.id().to_owned())
+            .or_insert_with(|| {
+                let i = match self
+                    .slots
+                    .iter()
+                    .position(|s| matches!(s, TextureSlot::Empty))
+                {
+                    Some(i) => i,
+                    None => {
+                        error!("texture slots exhausted");
+                        return TextureHandle(0);
+                    }
+                };
+                self.slots[i] = TextureSlot::Pending(handle);
+                TextureHandle(i as _)
+            })
+    }
+
+    pub fn get(&self, handle: TextureHandle) -> u32 {
+        handle.0
+    }
+
+    fn upload_pending(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let mut bindings_changed = false;
-
-        for s in &mut self.slots {
-            if let Some(slot) = s
-                && !handles.contains(&slot.asset)
+        for slot in &mut self.slots {
+            if let TextureSlot::Pending(handle) = slot
+                && let Some(tex) = handle.try_get()
             {
-                *s = None;
-                bindings_changed = true;
-            }
-        }
-
-        let mut i = 1;
-        for handle in handles {
-            if let Some(tex) = handle.try_get() {
-                if !self.asset_map.contains_key(handle.id()) {
-                    debug!("upload texture {:?}", handle.id());
-                    while self.slots[i].is_some() {
-                        i += 1;
-                    }
-
-                    let mut tex_format = match tex.compression {
-                        CompressionFormat::Bc7 => wgpu::TextureFormat::Bc7RgbaUnorm,
-                        CompressionFormat::Bc5 => wgpu::TextureFormat::Bc5RgUnorm,
-                        CompressionFormat::Bc4 => wgpu::TextureFormat::Bc4RUnorm,
-                        CompressionFormat::None => wgpu::TextureFormat::Rgba8Unorm,
-                    };
-                    if tex.mode == TextureMode::Srgb {
-                        tex_format = tex_format.add_srgb_suffix();
-                    }
-
-                    let texture = device.create_texture_with_data(
-                        queue,
-                        &wgpu::TextureDescriptor {
-                            size: wgpu::Extent3d {
-                                width: tex.width,
-                                height: tex.height,
-                                depth_or_array_layers: 1,
-                            },
-                            mip_level_count: tex.mip_count as _,
-                            sample_count: 1,
-                            dimension: wgpu::TextureDimension::D2,
-                            format: tex_format,
-                            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                            view_formats: &[],
-                            label: None,
-                        },
-                        wgpu::util::TextureDataOrder::default(),
-                        &tex.data,
-                    );
-                    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                    self.slots[i] = Some(TextureSlot {
-                        asset: handle.clone(),
-                        view,
-                    });
-                    self.asset_map.insert(handle.id().to_owned(), i as _);
-                    bindings_changed = true;
+                debug!("upload texture {:?}", handle.id());
+                let mut tex_format = match tex.compression {
+                    CompressionFormat::Bc7 => wgpu::TextureFormat::Bc7RgbaUnorm,
+                    CompressionFormat::Bc5 => wgpu::TextureFormat::Bc5RgUnorm,
+                    CompressionFormat::Bc4 => wgpu::TextureFormat::Bc4RUnorm,
+                    CompressionFormat::None => wgpu::TextureFormat::Rgba8Unorm,
+                };
+                if tex.mode == TextureMode::Srgb {
+                    tex_format = tex_format.add_srgb_suffix();
                 }
+
+                let texture = device.create_texture_with_data(
+                    queue,
+                    &wgpu::TextureDescriptor {
+                        size: wgpu::Extent3d {
+                            width: tex.width,
+                            height: tex.height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: tex.mip_count as _,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: tex_format,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                        view_formats: &[],
+                        label: None,
+                    },
+                    wgpu::util::TextureDataOrder::default(),
+                    &tex.data,
+                );
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                *slot = TextureSlot::Uploaded(view);
+                bindings_changed = true;
             }
         }
 
@@ -171,13 +168,11 @@ impl TextureManager {
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
-        slots: &[Option<TextureSlot>; MAX_BOUND_TEXTURES as _],
+        slots: &[TextureSlot; MAX_BOUND_TEXTURES as _],
         fallback: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         debug!("rebuilding texture bindings");
-        let views = slots
-            .each_ref()
-            .map(|s| s.as_ref().map(|s| &s.view).unwrap_or(fallback));
+        let views = slots.each_ref().map(|s| s.get_view(fallback));
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout,
@@ -195,9 +190,24 @@ impl TextureManager {
     }
 }
 
-struct TextureSlot {
-    asset: Handle<Texture>,
-    view: wgpu::TextureView,
+enum TextureSlot {
+    Reserved,
+    Empty,
+    Pending(Handle<Texture>),
+    Uploaded(wgpu::TextureView),
+}
+
+impl TextureSlot {
+    fn get_view<'a>(&'a self, fallback: &'a wgpu::TextureView) -> &'a wgpu::TextureView {
+        match self {
+            Self::Uploaded(view) => view,
+            _ => fallback,
+        }
+    }
+}
+
+pub fn upload_textures(ctx: Res<RenderContext>, mut textures: ResMut<TextureManager>) {
+    textures.upload_pending(&ctx.device, &ctx.queue);
 }
 
 pub struct Texture {
@@ -295,7 +305,7 @@ impl AssetProcessor for TextureProcessor {
         for level in &mip_levels {
             let mip_data = match opts.compression {
                 CompressionFormat::Bc7 => &bc7::compress_blocks(
-                    &bc7::opaque_ultra_fast_settings(),
+                    &bc7::alpha_ultra_fast_settings(),
                     &RgbaSurface {
                         data: level,
                         width: level.width(),

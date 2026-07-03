@@ -210,6 +210,7 @@ impl Schedule {
             // safety: we trust layers to be setup correctly to ensure safe access
             unsafe {
                 if layer.len() == 1 {
+                    // todo: we lose some potential by making main thread exclusive systems prevent other threads from being used
                     self.systems[layer[0]].run(ptr::from_mut(world), event);
                 } else {
                     rayon::scope(|s| {
@@ -336,6 +337,7 @@ pub trait System: Send + Sync {
     fn flush(&mut self, world: &mut World);
 }
 
+// todo: have a way to reuse combined orderings
 pub trait IntoSystem<P>: Sized {
     fn into_system(self) -> Box<dyn System>;
 
@@ -591,6 +593,7 @@ pub trait QueryData: Sized {
     fn declare_access(meta: &mut SystemMeta);
     /// safety: must only be used according to `declare_access`
     /// todo: we hand out this iterator with no lifetimes linking it to the World! probably scary
+    /// todo: allow this to be falliable, query should have an empty iterator
     unsafe fn get_iter(world: *mut World) -> impl Iterator<Item = (EntityId, Self)>;
 }
 
@@ -746,12 +749,12 @@ impl SystemParam for Commands<'_> {
 pub struct EntityCommands<'w>(&'w mut CommandBuffer, EntityId);
 
 impl EntityCommands<'_> {
-    pub fn insert<T: Any + Send + Sync>(&mut self, data: T) -> &mut Self {
+    pub fn insert<T: Any + Send + Sync>(self, data: T) -> Self {
         self.0.push(Box::new(InsertComponentCommand(data, self.1)));
         self
     }
 
-    pub fn remove<T: Any + Send + Sync>(&mut self) -> &mut Self {
+    pub fn remove<T: Any + Send + Sync>(self) -> Self {
         self.0
             .push(Box::new(RemoveComponentCommand(PhantomData::<T>, self.1)));
         self

@@ -3,7 +3,7 @@ use rayon::prelude::*;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::any::{self, Any};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
@@ -105,20 +105,6 @@ impl<T> Handle<T> {
     }
 }
 
-impl<T> Hash for Handle<T> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.id().hash(state)
-    }
-}
-
-impl<T> PartialEq for Handle<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.id() == other.id()
-    }
-}
-
-impl<T> Eq for Handle<T> {}
-
 impl<T> Clone for Handle<T> {
     fn clone(&self) -> Self {
         Handle(self.0.clone())
@@ -126,7 +112,7 @@ impl<T> Clone for Handle<T> {
 }
 
 #[derive(Serialize, Deserialize)]
-struct Manifest(HashMap<String, ManifestEntry>);
+struct Manifest(BTreeMap<String, ManifestEntry>);
 
 #[derive(Serialize, Deserialize)]
 struct ManifestEntry {

@@ -8,7 +8,6 @@ glam = "0.33"
 hex = { version = "0.4", features = ["serde"] }
 image = "0.25"
 intel_tex_2 = "0.5"
-memmap2 = "0.9"
 obj-rs = "0.7"
 pollster = "0.4"
 rayon = "1.12"

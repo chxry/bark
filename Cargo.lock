@@ -226,7 +226,6 @@ dependencies = [
  "hex",
  "image",
  "intel_tex_2",
- "memmap2",
  "obj-rs",
  "pollster",
  "rayon",
