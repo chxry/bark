@@ -19,8 +19,7 @@ fn main() {
     gfx::init(&mut app);
     assets::init(&mut app, env!("CARGO_MANIFEST_DIR").to_owned() + "/assets");
     bark3d::init(&mut app);
-    app.world
-        .insert_system::<app::Startup>(scene2.into_system());
+    app.world.insert_system::<app::Startup>(scene.into_system());
     app.world.insert_system::<app::Update>(spinny.into_system());
     app.run();
 }
@@ -55,12 +54,16 @@ fn scene(
         .insert(Spin);
     commands
         .spawn()
-        .insert(Transform::default().rotation(Quat::from_rotation_y(1.25)))
+        .insert(Transform::default().rotation_euler(1.5, -0.5, 0.0))
         .insert(DirectionalLight {});
     commands
         .spawn()
-        .insert(Transform::default().position(Vec3::new(0.0, 1.5, 5.0)))
-        .insert(Camera::new(1.0));
+        .insert(
+            Transform::default()
+                .position(Vec3::new(0.0, 2.5, 5.0))
+                .rotation_euler(0.0, -0.2, 0.0),
+        )
+        .insert(Camera::new(0.9));
 }
 
 fn scene2(mut assets: ResMut<Assets>, mut meshes: ResMut<MeshManager>, mut commands: Commands) {
@@ -101,7 +104,7 @@ fn scene2(mut assets: ResMut<Assets>, mut meshes: ResMut<MeshManager>, mut comma
         .insert(Camera::new(1.2));
     commands
         .spawn()
-        .insert(Transform::default().rotation(Quat::from_rotation_y(1.25)))
+        .insert(Transform::default().rotation_euler(1.5, 0.0, 0.0))
         .insert(DirectionalLight {});
     commands
         .spawn()

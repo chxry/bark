@@ -18,7 +18,6 @@ pub struct World {
     schedules: HashMap<TypeKey, Schedule>,
 }
 
-// todo: refactor all .downcast_xxx() calls to panic with typeid info instead of silenting returning none
 impl World {
     pub fn new() -> Self {
         Self {
@@ -506,7 +505,10 @@ impl<T: Any + Send + Sync> SystemParam for Res<'_, T> {
 
     unsafe fn fetch(world: *mut World, _: *mut Self::State, _: &dyn Any) -> Self {
         // safety: we requested this in `init`
-        Self(unsafe { (*world).get_resource() }.unwrap())
+        match unsafe { (*world).get_resource() } {
+            Some(r) => Self(r),
+            None => panic!("resource {:?} does not exist", any::type_name::<T>()),
+        }
     }
 }
 
@@ -542,7 +544,10 @@ impl<T: Any + Send + Sync> SystemParam for ResMut<'_, T> {
 
     unsafe fn fetch(world: *mut World, _: *mut Self::State, _: &dyn Any) -> Self {
         // safety: we requested this in `init`
-        Self(unsafe { (*world).get_resource_mut() }.unwrap())
+        match unsafe { (*world).get_resource_mut() } {
+            Some(r) => Self(r),
+            None => panic!("resource {:?} does not exist", any::type_name::<T>()),
+        }
     }
 }
 
@@ -681,7 +686,10 @@ impl<T: Any + Send + Sync> QueryData for &T {
 
     unsafe fn get_iter(world: *mut World) -> impl Iterator<Item = (EntityId, Self)> {
         // safety: we requested this in `declare_access`
-        unsafe { (*world).get_component_store() }.unwrap().iter()
+        unsafe { (*world).get_component_store() }
+            .map(|x| x.iter())
+            .into_iter()
+            .flatten()
     }
 }
 
@@ -700,8 +708,9 @@ impl<T: Any + Send + Sync> QueryData for &mut T {
     unsafe fn get_iter(world: *mut World) -> impl Iterator<Item = (EntityId, Self)> {
         // safety: we requested this in `declare_access`
         unsafe { (*world).get_component_store_mut() }
-            .unwrap()
-            .iter_mut()
+            .map(|x| x.iter_mut())
+            .into_iter()
+            .flatten()
     }
 }
 
@@ -817,12 +826,14 @@ impl<T: Any> SystemParam for Observer<'_, T> {
     fn init(_: &mut SystemMeta) {}
 
     unsafe fn fetch(_: *mut World, _: *mut Self::State, event: &dyn Any) -> Self {
-        Self(
-            // safety: hopefully implementing unsafecell will give us a lifetime here
-            unsafe { &*(event as *const dyn Any) }
-                .downcast_ref()
-                .unwrap(),
-        )
+        // safety(todo): hopefully implementing unsafecell will give us a lifetime here
+        match unsafe { &*(event as *const dyn Any) }.downcast_ref() {
+            Some(e) => Self(e),
+            None => panic!(
+                "incompatible observer type {:?} for schedule",
+                any::type_name::<T>()
+            ),
+        }
     }
 }
 

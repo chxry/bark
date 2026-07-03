@@ -1,5 +1,3 @@
-use glam::Mat3A;
-
 use crate::app::{self, App};
 use crate::ecs::{Commands, IntoSystem, Query, Res, ResMut};
 use crate::gfx::mesh::{INDEX_FORMAT, MeshHandle, MeshManager, Vertex};
@@ -7,7 +5,7 @@ use crate::gfx::texture::{TextureHandle, TextureManager};
 use crate::gfx::{
     self, DEFAULT_BUFFER_SIZE, Framebuffer, RenderContext, RenderFrame, SAMPLES, resize_buffer,
 };
-use crate::math::{Mat4, Quat, Vec3};
+use crate::math::{EulerRot, Mat3A, Mat4, Quat, Vec3};
 use crate::{cast_bytes, cast_bytes_slice};
 use std::mem;
 
@@ -40,6 +38,11 @@ impl Transform {
 
     pub fn rotation(mut self, rotation: Quat) -> Self {
         self.rotation = rotation;
+        self
+    }
+
+    pub fn rotation_euler(mut self, yaw: f32, pitch: f32, roll: f32) -> Self {
+        self.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, roll);
         self
     }
 
