@@ -1,10 +1,9 @@
 pub mod mesh;
 pub mod texture;
 
-use self::mesh::{MeshManager, MeshProcessor};
-use self::texture::{TextureManager, TextureProcessor};
+use self::mesh::MeshManager;
+use self::texture::TextureManager;
 use crate::app::{self, App, ResizeEvent, WindowHandle};
-use crate::assets::AssetProcessors;
 use crate::ecs::{Commands, IntoSystem, MainThread, Observer, Res, ResMut};
 use std::num::NonZero;
 use tracing::error;
@@ -215,9 +214,4 @@ impl Framebuffer {
             depth_view,
         }
     }
-}
-
-pub fn init_build(assets: &mut AssetProcessors) {
-    assets.register("texture", TextureProcessor);
-    assets.register("mesh", MeshProcessor);
 }

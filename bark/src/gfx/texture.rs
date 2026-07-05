@@ -1,8 +1,6 @@
 use super::RenderContext;
-use crate::assets::{Asset, AssetProcessor, Handle};
+use crate::assets::{Asset, Handle};
 use crate::ecs::{Res, ResMut};
-use image::imageops::{self, FilterType};
-use intel_tex_2::{RSurface, RgSurface, RgbaSurface, bc4, bc5, bc7};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -211,16 +209,16 @@ pub fn upload_textures(ctx: Res<RenderContext>, mut textures: ResMut<TextureMana
 }
 
 pub struct Texture {
-    width: u32,
-    height: u32,
-    mip_count: u8,
-    mode: TextureMode,
-    compression: CompressionFormat,
-    data: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub mip_count: u8,
+    pub mode: TextureMode,
+    pub compression: CompressionFormat,
+    pub data: Vec<u8>,
 }
 
 impl Texture {
-    fn write<W: Write>(&self, mut writer: W) {
+    pub fn write<W: Write>(&self, mut writer: W) {
         writer.write_all(&self.width.to_le_bytes()).unwrap();
         writer.write_all(&self.height.to_le_bytes()).unwrap();
         writer.write_all(&[self.mip_count]).unwrap();
@@ -264,98 +262,4 @@ pub enum CompressionFormat {
     Bc5,
     Bc4,
     None,
-}
-
-pub struct TextureProcessor;
-
-#[derive(Serialize, Deserialize)]
-pub struct TextureOptions {
-    mode: TextureMode,
-    compression: CompressionFormat,
-    generate_mipmaps: bool,
-}
-
-impl AssetProcessor for TextureProcessor {
-    type Options = TextureOptions;
-
-    // todo: respect TextureMode, only downsample needed channels
-    fn process<R: Read, W: Write>(&self, mut src: R, out: W, opts: Self::Options) {
-        let mut bytes = Vec::new();
-        src.read_to_end(&mut bytes).unwrap();
-
-        let image = image::load_from_memory(&bytes).unwrap().to_rgba8();
-
-        let mut mip_levels = vec![image];
-        if opts.generate_mipmaps {
-            let mut w = mip_levels[0].width();
-            let mut h = mip_levels[0].height();
-            while w > 4 && h > 4 {
-                w = (w / 2).max(4);
-                h = (h / 2).max(4);
-                mip_levels.push(imageops::resize(
-                    mip_levels.last().unwrap(),
-                    w,
-                    h,
-                    FilterType::Lanczos3,
-                ));
-            }
-        }
-
-        let mut data = vec![];
-        for level in &mip_levels {
-            let mip_data = match opts.compression {
-                CompressionFormat::Bc7 => &bc7::compress_blocks(
-                    &bc7::alpha_ultra_fast_settings(),
-                    &RgbaSurface {
-                        data: level,
-                        width: level.width(),
-                        height: level.height(),
-                        stride: level.width() * 4,
-                    },
-                ),
-                CompressionFormat::Bc5 => &bc5::compress_blocks(&RgSurface {
-                    data: &extract_rg(level),
-                    width: level.width(),
-                    height: level.height(),
-                    stride: level.width() * 2,
-                }),
-                CompressionFormat::Bc4 => &bc4::compress_blocks(&RSurface {
-                    data: &extract_r(level),
-                    width: level.width(),
-                    height: level.height(),
-                    stride: level.width(),
-                }),
-
-                CompressionFormat::None => level.as_raw(),
-            };
-            data.extend(mip_data);
-        }
-
-        let texture = Texture {
-            width: mip_levels[0].width(),
-            height: mip_levels[0].height(),
-            mip_count: mip_levels.len() as u8,
-            mode: opts.mode,
-            compression: opts.compression,
-            data,
-        };
-        texture.write(out);
-    }
-}
-
-fn extract_rg(img: &image::RgbaImage) -> Vec<u8> {
-    let mut out = Vec::with_capacity((img.width() * img.height() * 2) as usize);
-    for pixel in img.pixels() {
-        out.push(pixel[0]);
-        out.push(pixel[1]);
-    }
-    out
-}
-
-fn extract_r(img: &image::RgbaImage) -> Vec<u8> {
-    let mut out = Vec::with_capacity((img.width() * img.height()) as usize);
-    for pixel in img.pixels() {
-        out.push(pixel[0]);
-    }
-    out
 }

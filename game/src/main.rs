@@ -1,23 +1,22 @@
-use bark::assets::{AssetProcessors, Assets};
+use bark::assets::Assets;
 use bark::bark3d::{self, Camera, DirectionalLight, RenderObject, Transform};
 use bark::ecs::{Commands, IntoSystem, Query, ResMut};
 use bark::gfx::mesh::MeshManager;
 use bark::gfx::texture::TextureManager;
 use bark::math::{Quat, Vec3};
 use bark::{app, assets, gfx};
-
-// move out of game crate
-fn process_assets() {
-    let mut assets = AssetProcessors::new(env!("CARGO_MANIFEST_DIR").to_owned() + "/assets");
-    gfx::init_build(&mut assets);
-    assets.run();
-}
+use std::process::Command;
 
 fn main() {
-    process_assets();
+    let assets_dir = env!("CARGO_MANIFEST_DIR").to_owned() + "/assets";
+    Command::new("cargo")
+        .args(["run", "--release", "--bin", "bark-build", &assets_dir])
+        .status()
+        .unwrap();
+
     let mut app = bark::App::new();
     gfx::init(&mut app);
-    assets::init(&mut app, env!("CARGO_MANIFEST_DIR").to_owned() + "/assets");
+    assets::init(&mut app, assets_dir);
     bark3d::init(&mut app);
     app.world.insert_system::<app::Startup>(scene.into_system());
     app.world.insert_system::<app::Update>(spinny.into_system());

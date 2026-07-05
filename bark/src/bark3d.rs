@@ -283,7 +283,7 @@ fn init_pipeline(ctx: Res<RenderContext>, textures: Res<TextureManager>, mut com
 fn main_pass(
     ctx: Res<RenderContext>,
     mut frame: ResMut<RenderFrame>,
-    mut pipeline: ResMut<RenderPipeline>,
+    pipeline: ResMut<RenderPipeline>,
     framebuffer: Res<Framebuffer>,
     textures: Res<TextureManager>,
     meshes: Res<MeshManager>,

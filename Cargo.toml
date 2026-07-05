@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["bark", "game"]
+members = ["bark", "bark-build", "game"]
 
 [profile.release]
 debug = true
