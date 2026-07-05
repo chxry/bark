@@ -114,7 +114,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     light += (diffuse + specular) * n_dot_l;
   }
   
-  return vec4(light, 1.0);
+  return vec4(tonemap_uncharted2(light), 1.0);
 }
 
 fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
@@ -144,3 +144,18 @@ fn geometry_smith(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, roughness: f32) -> f
     let ggx2 = geometry_schlick_ggx(n_dot_l, roughness);
     return ggx1 * ggx2;
 }
+
+fn tonemap_uncharted2(color: vec3<f32>) -> vec3<f32> {
+    let A = 0.15;
+    let B = 0.50;  
+    let C = 0.10;
+    let D = 0.20;
+    let E = 0.02;
+    let F = 0.30;
+    let W = 11.2;
+    let bias = 2.0;
+
+    let x = vec4(bias * color, W);
+    let mapped = ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
+    return mapped.xyz / mapped.w;
+  }

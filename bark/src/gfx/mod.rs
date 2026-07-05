@@ -4,8 +4,9 @@ pub mod texture;
 use self::mesh::MeshManager;
 use self::texture::TextureManager;
 use crate::app::{self, App, ResizeEvent, WindowHandle};
-use crate::ecs::{Commands, IntoSystem, MainThread, Observer, Res, ResMut};
+use crate::ecs::{Commands, IntoSystem, MainThread, Observer, Res, ResMut, System};
 use std::num::NonZero;
+use std::sync::Mutex;
 use tracing::error;
 
 pub const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8UnormSrgb;
@@ -22,9 +23,9 @@ pub fn init(app: &mut App) {
     app.world
         .insert_system::<app::Render>(texture::upload_textures.before(submit_frame));
     app.world
-        .insert_system::<app::Render>(mesh::upload_meshes.after(begin_frame).before(submit_frame));
+        .insert_system::<app::Render>(mesh::upload_meshes.with(during_frame));
     app.world
-        .insert_system::<app::ResizeEvent>(on_resize.into_system());
+        .insert_system::<app::ResizeEvent>(resize_surface.into_system());
 }
 
 pub struct RenderContext {
@@ -61,7 +62,6 @@ pub fn init_renderer(window: Res<WindowHandle>, mut commands: Commands, _: MainT
 
     let size = window.inner_size();
     configure_surface(&device, &surface, size.width, size.height);
-    let framebuffer = Framebuffer::new(&device, size.width, size.height);
 
     let textures = TextureManager::new(&device, &queue);
     let meshes = MeshManager::new(&device);
@@ -73,16 +73,25 @@ pub fn init_renderer(window: Res<WindowHandle>, mut commands: Commands, _: MainT
     });
     commands.insert_resource(textures);
     commands.insert_resource(meshes);
-    commands.insert_resource(framebuffer);
-    commands.insert_resource(None as RenderFrame);
+    commands.insert_resource(RenderFrame::new());
 }
 
-pub type RenderFrame = Option<RenderFrameInner>;
+pub struct RenderFrame {
+    pub surface: Option<(wgpu::SurfaceTexture, wgpu::TextureView)>,
+    pub command_buffers: Mutex<Vec<wgpu::CommandBuffer>>,
+}
 
-pub struct RenderFrameInner {
-    pub surface: wgpu::SurfaceTexture,
-    pub surface_view: wgpu::TextureView,
-    pub encoder: wgpu::CommandEncoder,
+impl RenderFrame {
+    fn new() -> Self {
+        Self {
+            surface: None,
+            command_buffers: Mutex::new(vec![]),
+        }
+    }
+
+    pub fn submit(&self, command_buffer: wgpu::CommandBuffer) {
+        self.command_buffers.lock().unwrap().push(command_buffer);
+    }
 }
 
 pub fn begin_frame(ctx: Res<RenderContext>, mut frame: ResMut<RenderFrame>) {
@@ -97,24 +106,18 @@ pub fn begin_frame(ctx: Res<RenderContext>, mut frame: ResMut<RenderFrame>) {
     let surface_view = surface
         .texture
         .create_view(&wgpu::TextureViewDescriptor::default());
-    let encoder = ctx
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
 
-    *frame = Some(RenderFrameInner {
-        surface,
-        surface_view,
-        encoder,
-    });
+    frame.surface = Some((surface, surface_view));
 }
 
 pub fn submit_frame(ctx: Res<RenderContext>, mut frame: ResMut<RenderFrame>) {
-    let Some(frame) = frame.take() else {
+    let Some((surface, _)) = frame.surface.take() else {
         return;
     };
 
-    ctx.queue.submit([frame.encoder.finish()]);
-    ctx.queue.present(frame.surface);
+    ctx.queue
+        .submit(frame.command_buffers.get_mut().unwrap().drain(..));
+    ctx.queue.present(surface);
 }
 
 fn configure_surface(device: &wgpu::Device, surface: &wgpu::Surface, width: u32, height: u32) {
@@ -134,12 +137,7 @@ fn configure_surface(device: &wgpu::Device, surface: &wgpu::Surface, width: u32,
     );
 }
 
-pub fn on_resize(
-    resize: Observer<ResizeEvent>,
-    ctx: Res<RenderContext>,
-    mut framebuffer: ResMut<Framebuffer>,
-) {
-    *framebuffer = Framebuffer::new(&ctx.device, resize.width, resize.height);
+pub fn resize_surface(resize: Observer<ResizeEvent>, ctx: Res<RenderContext>) {
     configure_surface(&ctx.device, &ctx.surface, resize.width, resize.height);
 }
 
@@ -181,39 +179,6 @@ pub fn extend_buffer(
         .unwrap()
 }
 
-pub struct Framebuffer {
-    pub color_view: wgpu::TextureView,
-    pub depth_view: wgpu::TextureView,
-}
-
-impl Framebuffer {
-    fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
-        let desc = wgpu::TextureDescriptor {
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: SAMPLES,
-            dimension: wgpu::TextureDimension::D2,
-            format: SURFACE_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-            label: None,
-        };
-        let color_texture = device.create_texture(&desc);
-        let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
-            format: wgpu::TextureFormat::Depth32Float,
-            ..desc
-        });
-        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        Self {
-            color_view,
-            depth_view,
-        }
-    }
+pub fn during_frame(sys: Box<dyn System>) -> Box<dyn System> {
+    sys.after(begin_frame).before(submit_frame)
 }

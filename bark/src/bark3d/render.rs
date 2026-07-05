@@ -1,176 +1,28 @@
-use crate::app::{self, App};
-use crate::ecs::{Commands, IntoSystem, Query, Res, ResMut};
-use crate::gfx::mesh::{INDEX_FORMAT, MeshHandle, MeshManager, Vertex};
-use crate::gfx::texture::{TextureHandle, TextureManager};
+use super::{Camera, DirectionalLight, FORWARD, RenderObject, Transform};
+use crate::app::ResizeEvent;
+use crate::ecs::{Commands, Observer, Query, Res, ResMut};
+use crate::gfx::mesh::{INDEX_FORMAT, MeshManager, Vertex};
+use crate::gfx::texture::TextureManager;
 use crate::gfx::{
-    self, DEFAULT_BUFFER_SIZE, Framebuffer, RenderContext, RenderFrame, SAMPLES, resize_buffer,
+    DEFAULT_BUFFER_SIZE, RenderContext, RenderFrame, SAMPLES, SURFACE_FORMAT, resize_buffer,
 };
-use crate::math::{EulerRot, Mat3A, Mat4, Quat, Vec3};
+use crate::math::{Mat3A, Mat4, Vec3};
 use crate::{cast_bytes, cast_bytes_slice};
 use std::mem;
 
-pub const UP: Vec3 = Vec3::Y;
-pub const FORWARD: Vec3 = Vec3::NEG_Z;
-
-pub fn init(app: &mut App) {
-    app.world
-        .insert_system::<app::Startup>(init_pipeline.after(gfx::init_renderer));
-    app.world
-        .insert_system::<app::Render>(main_pass.after(gfx::begin_frame).before(gfx::submit_frame));
-    app.world.insert_system::<app::Render>(
-        extract_lights
-            .after(gfx::begin_frame)
-            .before(gfx::submit_frame),
-    );
-}
-
-pub struct Transform {
-    pub position: Vec3,
-    pub rotation: Quat,
-    pub scale: Vec3,
-}
-
-impl Transform {
-    pub fn position(mut self, position: Vec3) -> Self {
-        self.position = position;
-        self
-    }
-
-    pub fn rotation(mut self, rotation: Quat) -> Self {
-        self.rotation = rotation;
-        self
-    }
-
-    pub fn rotation_euler(mut self, yaw: f32, pitch: f32, roll: f32) -> Self {
-        self.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, roll);
-        self
-    }
-
-    pub fn scale(mut self, scale: Vec3) -> Self {
-        self.scale = scale;
-        self
-    }
-
-    pub fn as_mat4(&self) -> Mat4 {
-        Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position)
-    }
-}
-
-impl Default for Transform {
-    fn default() -> Self {
-        Self {
-            position: Vec3::ZERO,
-            rotation: Quat::IDENTITY,
-            scale: Vec3::ONE,
-        }
-    }
-}
-
-pub struct Camera {
-    pub fov: f32,
-}
-
-impl Camera {
-    pub fn new(fov: f32) -> Self {
-        Camera { fov }
-    }
-
-    pub fn as_mat4(&self, aspect_ratio: f32, transform: &Transform) -> Mat4 {
-        glam::camera::rh::proj::directx::perspective(self.fov, aspect_ratio, 0.01, 100.0)
-            * glam::camera::rh::view::look_to_mat4(
-                transform.position,
-                transform.rotation * FORWARD,
-                UP,
-            )
-    }
-}
-
-pub struct RenderObject {
-    pub mesh: MeshHandle,
-    pub diffuse_color: Vec3,
-    pub diffuse_tex: Option<TextureHandle>,
-    pub normal_tex: Option<TextureHandle>,
-    pub pbr: PbrMode,
-}
-
-impl RenderObject {
-    pub fn new(mesh: MeshHandle) -> Self {
-        Self {
-            mesh,
-            diffuse_color: Vec3::ONE,
-            diffuse_tex: None,
-            normal_tex: None,
-            pbr: PbrMode::Values {
-                roughness: 0.5,
-                metallic: 0.0,
-            },
-        }
-    }
-
-    pub fn diffuse_color(mut self, color: Vec3) -> Self {
-        self.diffuse_color = color;
-        self
-    }
-
-    pub fn diffuse_texture(mut self, tex: TextureHandle) -> Self {
-        self.diffuse_tex = Some(tex);
-        self
-    }
-
-    pub fn normal_texture(mut self, tex: TextureHandle) -> Self {
-        self.normal_tex = Some(tex);
-        self
-    }
-
-    pub fn pbr_texture(mut self, tex: TextureHandle) -> Self {
-        self.pbr = PbrMode::Sampled(tex);
-        self
-    }
-
-    pub fn pbr_values(mut self, roughness: f32, metallic: f32) -> Self {
-        self.pbr = PbrMode::Values {
-            roughness,
-            metallic,
-        };
-        self
-    }
-}
-
-#[derive(Clone)]
-pub enum PbrMode {
-    Sampled(TextureHandle),
-    Values { roughness: f32, metallic: f32 },
-}
-
-impl PbrMode {
-    fn get_tex(&self) -> Option<TextureHandle> {
-        match self {
-            Self::Sampled(t) => Some(*t),
-            _ => None,
-        }
-    }
-
-    fn get_arm_values(&self) -> Vec3 {
-        match self {
-            Self::Values {
-                roughness,
-                metallic,
-            } => Vec3::new(1.0, *roughness, *metallic),
-            _ => Vec3::ONE,
-        }
-    }
-}
-
-pub struct DirectionalLight {}
-
-struct RenderPipeline {
+// todo: consider seperating out scene stuff
+pub struct RenderPipeline {
     uniform_buffer: wgpu::Buffer,
     light_buffer: wgpu::Buffer,
     scene_bind_group: wgpu::BindGroup,
     pipeline: wgpu::RenderPipeline,
 }
 
-fn init_pipeline(ctx: Res<RenderContext>, textures: Res<TextureManager>, mut commands: Commands) {
+pub fn init_pipeline(
+    ctx: Res<RenderContext>,
+    textures: Res<TextureManager>,
+    mut commands: Commands,
+) {
     let uniform_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         size: mem::size_of::<GPUFrameGlobals>() as _,
         mapped_at_creation: false,
@@ -253,7 +105,7 @@ fn init_pipeline(ctx: Res<RenderContext>, textures: Res<TextureManager>, mut com
                 entry_point: Some("fs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Bgra8UnormSrgb,
+                    format: SURFACE_FORMAT,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -276,6 +128,12 @@ fn init_pipeline(ctx: Res<RenderContext>, textures: Res<TextureManager>, mut com
             label: None,
         });
 
+    let surface_config = ctx.surface.get_configuration().unwrap();
+    commands.insert_resource(Framebuffer::new(
+        &ctx.device,
+        surface_config.width,
+        surface_config.height,
+    ));
     commands.insert_resource(RenderPipeline {
         uniform_buffer,
         light_buffer,
@@ -284,17 +142,62 @@ fn init_pipeline(ctx: Res<RenderContext>, textures: Res<TextureManager>, mut com
     });
 }
 
-fn main_pass(
+pub struct Framebuffer {
+    color_view: wgpu::TextureView,
+    depth_view: wgpu::TextureView,
+}
+
+impl Framebuffer {
+    fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+        let desc = wgpu::TextureDescriptor {
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: SAMPLES,
+            dimension: wgpu::TextureDimension::D2,
+            format: SURFACE_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+            label: None,
+        };
+        let color_texture = device.create_texture(&desc);
+        let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            format: wgpu::TextureFormat::Depth32Float,
+            ..desc
+        });
+        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        Self {
+            color_view,
+            depth_view,
+        }
+    }
+}
+
+pub fn resize_framebuffer(
+    resize: Observer<ResizeEvent>,
     ctx: Res<RenderContext>,
-    mut frame: ResMut<RenderFrame>,
-    pipeline: ResMut<RenderPipeline>,
+    mut framebuffer: ResMut<Framebuffer>,
+) {
+    *framebuffer = Framebuffer::new(&ctx.device, resize.width, resize.height);
+}
+
+pub fn main_pass(
+    ctx: Res<RenderContext>,
+    frame: Res<RenderFrame>,
+    pipeline: Res<RenderPipeline>,
     framebuffer: Res<Framebuffer>,
     textures: Res<TextureManager>,
     meshes: Res<MeshManager>,
     mut cameras: Query<(&Transform, &Camera)>,
     mut scene_objects: Query<(&Transform, &RenderObject)>,
 ) {
-    let Some(frame) = frame.as_mut() else {
+    let Some((surface, surface_view)) = frame.surface.as_ref() else {
         return;
     };
 
@@ -302,7 +205,7 @@ fn main_pass(
         return;
     };
 
-    let aspect_ratio = frame.surface.texture.width() as f32 / frame.surface.texture.height() as f32;
+    let aspect_ratio = surface.texture.width() as f32 / surface.texture.height() as f32;
     let frame_globals = GPUFrameGlobals {
         camera: camera.as_mat4(aspect_ratio, camera_transform),
         camera_pos: camera_transform.position,
@@ -311,36 +214,38 @@ fn main_pass(
         cast_bytes(&frame_globals)
     });
 
-    let mut main_pass = frame
-        .encoder
-        .begin_render_pass(&wgpu::RenderPassDescriptor {
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &framebuffer.color_view,
-                resolve_target: Some(&frame.surface_view),
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.5,
-                        g: 0.6,
-                        b: 0.8,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &framebuffer.depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
+    let mut main_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &framebuffer.color_view,
+            resolve_target: Some(&surface_view),
+            depth_slice: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color {
+                    r: 0.5,
+                    g: 0.6,
+                    b: 0.8,
+                    a: 1.0,
                 }),
-                stencil_ops: None,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: &framebuffer.depth_view,
+            depth_ops: Some(wgpu::Operations {
+                load: wgpu::LoadOp::Clear(1.0),
+                store: wgpu::StoreOp::Store,
             }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-            label: None,
-        });
+            stencil_ops: None,
+        }),
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+        label: None,
+    });
     main_pass.set_pipeline(&pipeline.pipeline);
     main_pass.set_bind_group(0, &pipeline.scene_bind_group, &[]);
     main_pass.set_bind_group(1, &textures.bind_group, &[]);
@@ -362,18 +267,17 @@ fn main_pass(
             main_pass.draw_indexed(mesh.index_range(), mesh.vertex_range().start as _, 0..1);
         }
     }
+    drop(main_pass);
+
+    frame.submit(encoder.finish());
 }
 
-fn extract_lights(
+pub fn extract_lights(
     ctx: Res<RenderContext>,
-    mut frame: ResMut<RenderFrame>,
+    frame: Res<RenderFrame>,
     mut pipeline: ResMut<RenderPipeline>,
     mut lights: Query<(&Transform, &DirectionalLight)>,
 ) {
-    let Some(frame) = frame.as_mut() else {
-        return;
-    };
-
     let lights = lights
         .iter()
         .map(|(_, (t, _))| GPULight {
@@ -387,17 +291,30 @@ fn extract_lights(
         .collect::<Vec<_>>();
     let light_buf_size = (lights.len() * mem::size_of::<GPULight>()) as _;
     if pipeline.light_buffer.size() < light_buf_size {
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
         resize_buffer(
             &ctx.device,
-            &mut frame.encoder,
+            &mut encoder,
             &mut pipeline.light_buffer,
             light_buf_size,
             None,
         );
+
+        frame.submit(encoder.finish());
     }
     ctx.queue.write_buffer(&pipeline.light_buffer, 0, unsafe {
         cast_bytes_slice(&lights)
     });
+}
+
+pub fn shadow_pass(
+    ctx: Res<RenderContext>,
+    pipeline: Res<RenderPipeline>,
+    mut lights: Query<(&Transform, &DirectionalLight)>,
+) {
 }
 
 #[repr(C)]

@@ -66,8 +66,7 @@ impl MeshManager {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-    ) {
+    ) -> Option<wgpu::CommandBuffer> {
         let mut to_upload = vec![];
         let mut upload_vertex_size = 0;
         let mut upload_index_size = 0;
@@ -82,11 +81,16 @@ impl MeshManager {
             }
         }
 
-        if !to_upload.is_empty() {
+        if to_upload.is_empty() {
+            None
+        } else {
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+
             let mut vertex_view = extend_buffer(
                 device,
                 queue,
-                encoder,
+                &mut encoder,
                 &mut self.vertex_buffer,
                 self.vertex_end,
                 upload_vertex_size as _,
@@ -94,7 +98,7 @@ impl MeshManager {
             let mut index_view = extend_buffer(
                 device,
                 queue,
-                encoder,
+                &mut encoder,
                 &mut self.index_buffer,
                 self.index_end,
                 upload_index_size as _,
@@ -119,6 +123,7 @@ impl MeshManager {
 
                 self.allocations[i] = MeshSlot::Uploaded(allocation);
             }
+            Some(encoder.finish())
         }
     }
 }
@@ -167,14 +172,12 @@ impl MeshAllocation {
 
 pub fn upload_meshes(
     ctx: Res<RenderContext>,
-    mut frame: ResMut<RenderFrame>,
+    frame: Res<RenderFrame>,
     mut meshes: ResMut<MeshManager>,
 ) {
-    let Some(frame) = frame.as_mut() else {
-        return;
-    };
-
-    meshes.upload_pending(&ctx.device, &ctx.queue, &mut frame.encoder);
+    if let Some(buffer) = meshes.upload_pending(&ctx.device, &ctx.queue) {
+        frame.submit(buffer);
+    }
 }
 
 pub struct Mesh {

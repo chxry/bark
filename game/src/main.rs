@@ -53,8 +53,13 @@ fn scene(
         .insert(Spin);
     commands
         .spawn()
+        .insert(Transform::default().scale(Vec3::splat(3.0)))
+        .insert(RenderObject::new(meshes.add(assets.load("plane.obj"))));
+
+    commands
+        .spawn()
         .insert(Transform::default().rotation_euler(1.5, -0.5, 0.0))
-        .insert(DirectionalLight {});
+        .insert(DirectionalLight::default());
     commands
         .spawn()
         .insert(
@@ -104,11 +109,11 @@ fn scene2(mut assets: ResMut<Assets>, mut meshes: ResMut<MeshManager>, mut comma
     commands
         .spawn()
         .insert(Transform::default().rotation_euler(1.5, 0.0, 0.0))
-        .insert(DirectionalLight {});
+        .insert(DirectionalLight::default());
     commands
         .spawn()
         .insert(Transform::default())
-        .insert(DirectionalLight {})
+        .insert(DirectionalLight::default())
         .insert(Spin);
 }
 

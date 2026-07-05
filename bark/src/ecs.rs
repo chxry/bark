@@ -363,6 +363,10 @@ pub trait IntoSystem<P>: Sized {
         }
         sys
     }
+
+    fn with<F: FnMut(Box<dyn System>) -> Box<dyn System>>(self, mut f: F) -> Box<dyn System> {
+        f(self.into_system())
+    }
 }
 
 impl IntoSystem<()> for Box<dyn System> {
@@ -598,7 +602,6 @@ pub trait QueryData: Sized {
     fn declare_access(meta: &mut SystemMeta);
     /// safety: must only be used according to `declare_access`
     /// todo: we hand out this iterator with no lifetimes linking it to the World! probably scary
-    /// todo: allow this to be falliable, query should have an empty iterator
     unsafe fn get_iter(world: *mut World) -> impl Iterator<Item = (EntityId, Self)>;
 }
 
