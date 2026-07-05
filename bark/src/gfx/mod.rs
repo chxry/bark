@@ -40,6 +40,7 @@ pub fn init_renderer(window: Res<WindowHandle>, mut commands: Commands, _: MainT
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: Some(&surface),
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
     .unwrap();
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -113,7 +114,7 @@ pub fn submit_frame(ctx: Res<RenderContext>, mut frame: ResMut<RenderFrame>) {
     };
 
     ctx.queue.submit([frame.encoder.finish()]);
-    frame.surface.present();
+    ctx.queue.present(frame.surface);
 }
 
 fn configure_surface(device: &wgpu::Device, surface: &wgpu::Surface, width: u32, height: u32) {
@@ -127,6 +128,7 @@ fn configure_surface(device: &wgpu::Device, surface: &wgpu::Surface, width: u32,
             present_mode: wgpu::PresentMode::AutoVsync,
             desired_maximum_frame_latency: 2,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             view_formats: vec![],
         },
     );

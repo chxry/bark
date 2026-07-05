@@ -76,8 +76,12 @@ impl Camera {
     }
 
     pub fn as_mat4(&self, aspect_ratio: f32, transform: &Transform) -> Mat4 {
-        Mat4::perspective_rh(self.fov, aspect_ratio, 0.01, 100.0)
-            * Mat4::look_to_rh(transform.position, transform.rotation * FORWARD, UP)
+        glam::camera::rh::proj::directx::perspective(self.fov, aspect_ratio, 0.01, 100.0)
+            * glam::camera::rh::view::look_to_mat4(
+                transform.position,
+                transform.rotation * FORWARD,
+                UP,
+            )
     }
 }
 
@@ -242,7 +246,7 @@ fn init_pipeline(ctx: Res<RenderContext>, textures: Res<TextureManager>, mut com
                 module: &shader,
                 entry_point: Some("vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Vertex::LAYOUT],
+                buffers: &[Some(Vertex::LAYOUT)],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,

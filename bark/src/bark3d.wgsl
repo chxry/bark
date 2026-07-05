@@ -1,3 +1,5 @@
+enable wgpu_binding_array;
+
 const pi = radians(180.0);
 
 struct VsOut {

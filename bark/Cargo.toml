@@ -16,7 +16,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-tracy = { version = "0.11", optional = true }
 tracy-client = { version = "0.18", optional = true }
 variadics_please = "2.0"
-wgpu = "29.0"
+wgpu = "30.0"
 winit = "0.30"
 
 [features]

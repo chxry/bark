@@ -1,5 +1,6 @@
 use crate::ecs::World;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
@@ -21,6 +22,8 @@ pub type WindowHandle = Arc<Window>;
 
 pub struct App {
     pub world: World,
+    last_frame: Instant,
+    accumulator: Duration,
 }
 
 impl App {
@@ -39,6 +42,8 @@ impl App {
 
         Self {
             world: World::new(),
+            last_frame: Instant::now(),
+            accumulator: Duration::ZERO,
         }
     }
 
@@ -56,6 +61,7 @@ impl ApplicationHandler for App {
                 .unwrap(),
         );
         self.world.insert_resource(window);
+        self.world.insert_resource(UpdateTarget(60.0));
         self.world.run_schedule(Startup);
     }
 
@@ -67,7 +73,19 @@ impl ApplicationHandler for App {
                 height: size.height,
             }),
             WindowEvent::RedrawRequested => {
-                self.world.run_schedule(Update);
+                let now = Instant::now();
+                let delta = now - self.last_frame;
+                self.last_frame = now;
+                self.accumulator += delta;
+
+                let timestep = Duration::from_secs_f32(
+                    1.0 / self.world.get_resource::<UpdateTarget>().unwrap().0,
+                );
+                while self.accumulator >= timestep {
+                    self.world.run_schedule(Update);
+                    self.accumulator -= timestep;
+                }
+
                 self.world.run_schedule(Render);
 
                 #[cfg(feature = "tracy")]
@@ -88,3 +106,5 @@ pub struct ResizeEvent {
     pub width: u32,
     pub height: u32,
 }
+
+pub struct UpdateTarget(pub f32);
