@@ -21,28 +21,33 @@ struct Object {
 }
 
 struct FrameGlobals {
-  camera: mat4x4<f32>,
+  camera_mat: mat4x4<f32>,
+  shadow_caster_mat: mat4x4<f32>,
   camera_pos: vec3<f32>
 }
 
 struct Light {
   direction: vec3<f32>,
-  tag: u32
+  tag: u32,
+  color: vec3<f32>
 }
 
 var<immediate> object: Object;
 
 @group(0) @binding(0)
 var<uniform> frame: FrameGlobals;
-
 @group(0) @binding(1)
 var<storage, read> lights: array<Light>;
 
 @group(1) @binding(0)
 var textures: binding_array<texture_2d<f32>>;
-
 @group(1) @binding(1)
 var tex_sampler: sampler;
+
+@group(2) @binding(0)
+var shadow_map: texture_depth_2d;
+@group(2) @binding(1)
+var shadow_map_sampler: sampler_comparison;
 
 @vertex
 fn vs_main(
@@ -53,7 +58,7 @@ fn vs_main(
 ) -> VsOut {
   let world_pos = object.transform * vec4(pos, 1.0);
   return VsOut(
-    frame.camera * world_pos,
+    frame.camera_mat * world_pos,
     world_pos.xyz,
     uv,
     object.normal_transform * normal,
@@ -89,8 +94,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
   let roughness = clamp(pbr.g, 0.04, 1.0);
   let metallic = pbr.b;
 
-
   let ambient = diffuse_color * 0.05 * ao;
+
+  let shadow = shadow_factor(in.world_pos);
   
   var light = ambient;
   for (var i = 0u; lights[i].tag != 0; i++) {  
@@ -111,7 +117,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let kd = (1.0 - f) * (1.0 - metallic);
     let diffuse = kd * diffuse_color / pi;
 
-    light += (diffuse + specular) * n_dot_l;
+    light += lights[i].color * (diffuse + specular) * n_dot_l * shadow;
   }
   
   return vec4(tonemap_uncharted2(light), 1.0);
@@ -159,3 +165,23 @@ fn tonemap_uncharted2(color: vec3<f32>) -> vec3<f32> {
     let mapped = ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
     return mapped.xyz / mapped.w;
   }
+
+fn shadow_factor(world_pos: vec3<f32>) -> f32 {
+    let light_space_pos = frame.shadow_caster_mat * vec4(world_pos, 1.0);
+    let uv = vec2(light_space_pos.x * 0.5 + 0.5, light_space_pos.y * -0.5 + 0.5);
+    if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 {
+        return 1.0;
+    }
+    
+    let texture_size = vec2<f32>(textureDimensions(shadow_map));
+    let texel_size = 1.0 / texture_size;
+    
+    var shadow = 0.0;
+    for (var x = -1; x <= 1; x++) {
+        for (var y = -1; y <= 1; y++) {
+            let offset = vec2(f32(x), f32(y)) * texel_size;
+            shadow += textureSampleCompare(shadow_map,shadow_map_sampler, uv + offset, light_space_pos.z - 0.001);
+        }
+    }
+    return shadow / 9.0;
+}

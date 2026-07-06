@@ -23,6 +23,8 @@ pub fn init(app: &mut App) {
     app.world
         .insert_system::<app::Render>(render::extract_lights.with(gfx::during_frame));
     app.world
+        .insert_system::<app::Render>(render::extract_frame_globals.with(gfx::during_frame));
+    app.world
         .insert_system::<app::ResizeEvent>(render::resize_framebuffer.into_system());
 }
 
@@ -53,8 +55,12 @@ impl Transform {
         self
     }
 
-    pub fn as_mat4(&self) -> Mat4 {
+    pub fn as_transform_mat(&self) -> Mat4 {
         Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position)
+    }
+
+    pub fn as_view_mat(&self) -> Mat4 {
+        glam::camera::rh::view::look_to_mat4(self.position, self.rotation * FORWARD, UP)
     }
 }
 
@@ -77,13 +83,9 @@ impl Camera {
         Camera { fov }
     }
 
-    pub fn as_mat4(&self, aspect_ratio: f32, transform: &Transform) -> Mat4 {
+    pub fn as_mat(&self, aspect_ratio: f32, transform: &Transform) -> Mat4 {
         glam::camera::rh::proj::directx::perspective(self.fov, aspect_ratio, 0.01, 100.0)
-            * glam::camera::rh::view::look_to_mat4(
-                transform.position,
-                transform.rotation * FORWARD,
-                UP,
-            )
+            * transform.as_view_mat()
     }
 }
 

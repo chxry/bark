@@ -87,20 +87,22 @@ impl MeshManager {
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
 
+            let vertex_base = self.vertex_end;
             let mut vertex_view = extend_buffer(
                 device,
                 queue,
                 &mut encoder,
                 &mut self.vertex_buffer,
-                self.vertex_end,
+                vertex_base,
                 upload_vertex_size as _,
             );
+            let index_base = self.index_end;
             let mut index_view = extend_buffer(
                 device,
                 queue,
                 &mut encoder,
                 &mut self.index_buffer,
-                self.index_end,
+                index_base,
                 upload_index_size as _,
             );
 
@@ -115,10 +117,16 @@ impl MeshManager {
                 self.vertex_end += allocation.vertex_len;
                 self.index_end += allocation.index_len;
                 vertex_view
-                    .slice(allocation.vertex_start as usize..self.vertex_end as _)
+                    .slice(
+                        (allocation.vertex_start - vertex_base) as usize
+                            ..(self.vertex_end - vertex_base) as _,
+                    )
                     .copy_from_slice(&mesh.vertex_data);
                 index_view
-                    .slice(allocation.index_start as usize..self.index_end as _)
+                    .slice(
+                        (allocation.index_start - index_base) as usize
+                            ..(self.index_end - index_base) as _,
+                    )
                     .copy_from_slice(&mesh.index_data);
 
                 self.allocations[i] = MeshSlot::Uploaded(allocation);
@@ -128,6 +136,7 @@ impl MeshManager {
     }
 }
 
+// todo: this has the evil side effect of forcing cpu assets to be reloaded even if they are already uploaded, not terrible since it can be the users responsibility to manage a Handle if they want to upload multiple times.
 enum MeshSlot {
     Pending(Handle<Mesh>),
     Uploaded(MeshAllocation),

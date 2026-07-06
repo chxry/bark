@@ -145,11 +145,11 @@ pub fn resize_buffer(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     buffer: &mut wgpu::Buffer,
-    size: wgpu::BufferAddress,
-    usage: Option<wgpu::BufferAddress>,
+    needed_size: wgpu::BufferAddress,
+    old_size: Option<wgpu::BufferAddress>,
 ) {
     let new_size = wgpu::util::align_to(
-        (buffer.size() * 3 / 2).max(size),
+        (buffer.size() * 3 / 2).max(needed_size),
         wgpu::COPY_BUFFER_ALIGNMENT,
     );
     let new_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -158,7 +158,7 @@ pub fn resize_buffer(
         mapped_at_creation: false,
         label: None,
     });
-    encoder.copy_buffer_to_buffer(buffer, 0, &new_buffer, 0, usage.unwrap_or(buffer.size()));
+    encoder.copy_buffer_to_buffer(buffer, 0, &new_buffer, 0, old_size.unwrap_or(buffer.size()));
     *buffer = new_buffer;
 }
 
@@ -168,14 +168,14 @@ pub fn extend_buffer(
     encoder: &mut wgpu::CommandEncoder,
     buffer: &mut wgpu::Buffer,
     offset: wgpu::BufferAddress,
-    size: wgpu::BufferAddress,
+    extend_size: wgpu::BufferAddress,
 ) -> wgpu::QueueWriteBufferView {
-    let needed_size = size + offset;
+    let needed_size = offset + extend_size;
     if buffer.size() < needed_size {
         resize_buffer(device, encoder, buffer, needed_size, Some(offset));
     }
     queue
-        .write_buffer_with(buffer, offset, NonZero::new(size).unwrap())
+        .write_buffer_with(buffer, offset, NonZero::new(extend_size).unwrap())
         .unwrap()
 }
 

@@ -31,35 +31,27 @@ fn scene(
     mut meshes: ResMut<MeshManager>,
     mut commands: Commands,
 ) {
+    commands.spawn().insert(Transform::default()).insert(
+        RenderObject::new(meshes.add(assets.load("potted_plant_02_leaves.obj")))
+            .diffuse_texture(textures.add(assets.load("potted_plant_02_leaves_diff_4k.png")))
+            .normal_texture(textures.add(assets.load("potted_plant_02_leaves_nor_gl_4k.png")))
+            .pbr_texture(textures.add(assets.load("potted_plant_02_leaves_arm_4k.png"))),
+    );
+    commands.spawn().insert(Transform::default()).insert(
+        RenderObject::new(meshes.add(assets.load("potted_plant_02_pot.obj")))
+            .diffuse_texture(textures.add(assets.load("potted_plant_02_pot_diff_4k.png")))
+            .normal_texture(textures.add(assets.load("potted_plant_02_pot_nor_gl_4k.png")))
+            .pbr_texture(textures.add(assets.load("potted_plant_02_pot_arm_4k.png"))),
+    );
     commands
         .spawn()
-        .insert(Transform::default())
-        .insert(
-            RenderObject::new(meshes.add(assets.load("potted_plant_02_leaves.obj")))
-                .diffuse_texture(textures.add(assets.load("potted_plant_02_leaves_diff_4k.png")))
-                .normal_texture(textures.add(assets.load("potted_plant_02_leaves_nor_gl_4k.png")))
-                .pbr_texture(textures.add(assets.load("potted_plant_02_leaves_arm_4k.png"))),
-        )
-        .insert(Spin);
-    commands
-        .spawn()
-        .insert(Transform::default())
-        .insert(
-            RenderObject::new(meshes.add(assets.load("potted_plant_02_pot.obj")))
-                .diffuse_texture(textures.add(assets.load("potted_plant_02_pot_diff_4k.png")))
-                .normal_texture(textures.add(assets.load("potted_plant_02_pot_nor_gl_4k.png")))
-                .pbr_texture(textures.add(assets.load("potted_plant_02_pot_arm_4k.png"))),
-        )
-        .insert(Spin);
-    commands
-        .spawn()
-        .insert(Transform::default().scale(Vec3::splat(3.0)))
+        .insert(Transform::default().scale(Vec3::splat(10.0)))
         .insert(RenderObject::new(meshes.add(assets.load("plane.obj"))));
-
     commands
         .spawn()
-        .insert(Transform::default().rotation_euler(1.5, -0.5, 0.0))
-        .insert(DirectionalLight::default());
+        .insert(Transform::default().rotation_euler(0.0, -0.5, 0.0))
+        .insert(DirectionalLight::default().shadows(true))
+        .insert(Spin);
     commands
         .spawn()
         .insert(
@@ -113,12 +105,12 @@ fn scene2(mut assets: ResMut<Assets>, mut meshes: ResMut<MeshManager>, mut comma
     commands
         .spawn()
         .insert(Transform::default())
-        .insert(DirectionalLight::default())
+        .insert(DirectionalLight::default().shadows(true))
         .insert(Spin);
 }
 
 fn spinny(mut transforms: Query<(&mut Transform, &Spin)>) {
     for (_, (t, _)) in transforms.iter() {
-        t.rotation *= Quat::from_rotation_y(0.01);
+        t.rotation = Quat::from_rotation_y(0.01) * t.rotation;
     }
 }
