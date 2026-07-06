@@ -9,6 +9,7 @@ use crate::math::{EulerRot, Mat4, Quat, Vec3};
 
 pub const UP: Vec3 = Vec3::Y;
 pub const FORWARD: Vec3 = Vec3::NEG_Z;
+pub const RIGHT: Vec3 = Vec3::X;
 
 pub fn init(app: &mut App) {
     app.world

@@ -1,13 +1,17 @@
 use crate::ecs::World;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{DeviceEvent, DeviceId, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowAttributes, WindowId};
+
+pub use winit;
 
 #[cfg(feature = "tracy")]
 #[global_allocator]
@@ -61,6 +65,7 @@ impl ApplicationHandler for App {
                 .unwrap(),
         );
         self.world.insert_resource(window);
+        self.world.insert_resource(Input::new());
         self.world.insert_resource(UpdateTarget(60.0));
         self.world.run_schedule(Startup);
     }
@@ -72,6 +77,24 @@ impl ApplicationHandler for App {
                 width: size.width,
                 height: size.height,
             }),
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(code) = event.physical_key {
+                    let input = self.world.get_resource_mut::<Input>().unwrap();
+                    if event.state.is_pressed() {
+                        input.keys_down.insert(code);
+                    } else {
+                        input.keys_down.remove(&code);
+                    }
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let input = self.world.get_resource_mut::<Input>().unwrap();
+                match button {
+                    MouseButton::Left => input.left_mouse = state.is_pressed(),
+                    MouseButton::Right => input.right_mouse = state.is_pressed(),
+                    _ => {}
+                }
+            }
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
                 let delta = now - self.last_frame;
@@ -84,12 +107,24 @@ impl ApplicationHandler for App {
                 while self.accumulator >= timestep {
                     self.world.run_schedule(Update);
                     self.accumulator -= timestep;
+                    let input = self.world.get_resource_mut::<Input>().unwrap();
+                    input.end_frame();
                 }
 
                 self.world.run_schedule(Render);
 
                 #[cfg(feature = "tracy")]
                 tracy_client::frame_mark();
+            }
+            _ => {}
+        }
+    }
+
+    fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
+        match event {
+            DeviceEvent::MouseMotion { delta } => {
+                let input = self.world.get_resource_mut::<Input>().unwrap();
+                input.mouse_delta = (delta.0 as _, delta.1 as _)
             }
             _ => {}
         }
@@ -108,3 +143,41 @@ pub struct ResizeEvent {
 }
 
 pub struct UpdateTarget(pub f32);
+
+pub struct Input {
+    keys_down: HashSet<KeyCode>,
+    mouse_delta: (f32, f32),
+    left_mouse: bool,
+    right_mouse: bool,
+}
+
+impl Input {
+    fn new() -> Self {
+        Self {
+            keys_down: HashSet::new(),
+            mouse_delta: (0.0, 0.0),
+            left_mouse: false,
+            right_mouse: false,
+        }
+    }
+
+    fn end_frame(&mut self) {
+        self.mouse_delta = (0.0, 0.0);
+    }
+
+    pub fn key_down(&self, key: KeyCode) -> bool {
+        self.keys_down.contains(&key)
+    }
+
+    pub fn mouse_delta(&self) -> (f32, f32) {
+        self.mouse_delta
+    }
+
+    pub fn left_mouse_down(&self) -> bool {
+        self.left_mouse
+    }
+
+    pub fn right_mouse_down(&self) -> bool {
+        self.right_mouse
+    }
+}

@@ -1,10 +1,14 @@
+use bark::app::winit::keyboard::KeyCode;
+use bark::app::winit::window::CursorGrabMode;
+use bark::app::{Input, WindowHandle};
 use bark::assets::Assets;
 use bark::bark3d::{self, Camera, DirectionalLight, RenderObject, Transform};
-use bark::ecs::{Commands, IntoSystem, Query, ResMut};
+use bark::ecs::{Commands, IntoSystem, Query, Res, ResMut};
 use bark::gfx::mesh::MeshManager;
 use bark::gfx::texture::TextureManager;
-use bark::math::{Quat, Vec3};
+use bark::math::{EulerRot, Quat, Vec3};
 use bark::{app, assets, gfx};
+use std::f32::consts::FRAC_PI_2;
 use std::process::Command;
 
 fn main() {
@@ -20,6 +24,8 @@ fn main() {
     bark3d::init(&mut app);
     app.world.insert_system::<app::Startup>(scene.into_system());
     app.world.insert_system::<app::Update>(spinny.into_system());
+    app.world
+        .insert_system::<app::Update>(update_camera.into_system());
     app.run();
 }
 
@@ -54,12 +60,12 @@ fn scene(
         .insert(Spin);
     commands
         .spawn()
-        .insert(
-            Transform::default()
-                .position(Vec3::new(0.0, 2.5, 5.0))
-                .rotation_euler(0.0, -0.2, 0.0),
-        )
-        .insert(Camera::new(0.9));
+        .insert(Transform::default().position(Vec3::new(0.0, 2.5, 5.0)))
+        .insert(Camera::new(0.9))
+        .insert(CameraController {
+            yaw: 0.0,
+            pitch: -0.2,
+        });
 }
 
 fn scene2(mut assets: ResMut<Assets>, mut meshes: ResMut<MeshManager>, mut commands: Commands) {
@@ -98,6 +104,7 @@ fn scene2(mut assets: ResMut<Assets>, mut meshes: ResMut<MeshManager>, mut comma
             10.0,
         )))
         .insert(Camera::new(1.2));
+
     commands
         .spawn()
         .insert(Transform::default().rotation_euler(1.5, 0.0, 0.0))
@@ -113,4 +120,53 @@ fn spinny(mut transforms: Query<(&mut Transform, &Spin)>) {
     for (_, (t, _)) in transforms.iter() {
         t.rotation = Quat::from_rotation_y(0.01) * t.rotation;
     }
+}
+
+struct CameraController {
+    yaw: f32,
+    pitch: f32,
+}
+
+fn update_camera(
+    mut camera: Query<(&mut Transform, &mut CameraController)>,
+    input: Res<Input>,
+    window: Res<WindowHandle>,
+) {
+    let Some((_, (transform, controller))) = camera.iter().next() else {
+        return;
+    };
+
+    let speed = if input.key_down(KeyCode::ShiftLeft) {
+        0.01
+    } else {
+        0.1
+    };
+    let mouse_sens = 0.002;
+
+    if input.key_down(KeyCode::KeyW) {
+        transform.position += transform.rotation * bark3d::FORWARD * speed;
+    }
+    if input.key_down(KeyCode::KeyS) {
+        transform.position -= transform.rotation * bark3d::FORWARD * speed;
+    }
+    if input.key_down(KeyCode::KeyA) {
+        transform.position -= transform.rotation * bark3d::RIGHT * speed;
+    }
+    if input.key_down(KeyCode::KeyD) {
+        transform.position += transform.rotation * bark3d::RIGHT * speed;
+    }
+    window
+        .set_cursor_grab(if input.left_mouse_down() {
+            CursorGrabMode::Locked
+        } else {
+            CursorGrabMode::None
+        })
+        .unwrap();
+    window.set_cursor_visible(!input.left_mouse_down());
+    if input.left_mouse_down() {
+        controller.yaw -= input.mouse_delta().0 * mouse_sens;
+        controller.pitch -= input.mouse_delta().1 * mouse_sens;
+        controller.pitch = controller.pitch.clamp(-FRAC_PI_2 + 0.01, FRAC_PI_2 - 0.01);
+    }
+    transform.rotation = Quat::from_euler(EulerRot::YXZ, controller.yaw, controller.pitch, 0.0);
 }
