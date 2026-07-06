@@ -22,7 +22,8 @@ fn main() {
     gfx::init(&mut app);
     assets::init(&mut app, assets_dir);
     bark3d::init(&mut app);
-    app.world.insert_system::<app::Startup>(scene.into_system());
+    app.world
+        .insert_system::<app::Startup>(scene2.into_system());
     app.world.insert_system::<app::Update>(spinny.into_system());
     app.world
         .insert_system::<app::Update>(update_camera.into_system());
@@ -51,12 +52,27 @@ fn scene(
     );
     commands
         .spawn()
-        .insert(Transform::default().scale(Vec3::splat(10.0)))
+        .insert(
+            Transform::default()
+                .position(Vec3::new(2.0, 0.0, 0.0))
+                .scale(Vec3::splat(0.25)),
+        )
+        .insert(
+            RenderObject::new(meshes.add(assets.load("garfield.obj")))
+                .diffuse_texture(textures.add(assets.load("garfield.png"))),
+        );
+    commands
+        .spawn()
+        .insert(Transform::default().scale(Vec3::splat(25.0)))
         .insert(RenderObject::new(meshes.add(assets.load("plane.obj"))));
     commands
         .spawn()
         .insert(Transform::default().rotation_euler(0.0, -0.5, 0.0))
-        .insert(DirectionalLight::default().shadows(true))
+        .insert(
+            DirectionalLight::default()
+                .shadows(true)
+                .color(Vec3::splat(2.5)),
+        )
         .insert(Spin);
     commands
         .spawn()
@@ -68,13 +84,21 @@ fn scene(
         });
 }
 
-fn scene2(mut assets: ResMut<Assets>, mut meshes: ResMut<MeshManager>, mut commands: Commands) {
-    let sphere_mesh = meshes.add(assets.load("sphere.obj"));
+fn scene2(
+    mut assets: ResMut<Assets>,
+    mut meshes: ResMut<MeshManager>,
+    mut textures: ResMut<TextureManager>,
+    mut commands: Commands,
+) {
+    let mesh = meshes.add(assets.load("sphere.obj"));
+    // let mesh = meshes.add(assets.load("garfield.obj"));
+    let tex = textures.add(assets.load("garfield.png"));
 
     let rows = 10;
     let cols = 10;
     let spacing = 1.25;
     let scale = 0.5;
+    // let scale = 0.25;
 
     for y in 0..rows {
         for x in 0..cols {
@@ -89,10 +113,12 @@ fn scene2(mut assets: ResMut<Assets>, mut meshes: ResMut<MeshManager>, mut comma
                         .scale(Vec3::splat(scale)),
                 )
                 .insert(
-                    RenderObject::new(sphere_mesh)
+                    RenderObject::new(mesh)
                         .diffuse_color(Vec3::X)
+                        // .diffuse_texture(tex)
                         .pbr_values(roughness, metallic),
-                );
+                )
+                .insert(Spin);
         }
     }
 
@@ -103,16 +129,20 @@ fn scene2(mut assets: ResMut<Assets>, mut meshes: ResMut<MeshManager>, mut comma
             (cols as f32 / 2.0) * spacing - scale,
             10.0,
         )))
-        .insert(Camera::new(1.2));
+        .insert(Camera::new(1.2))
+        .insert(CameraController {
+            yaw: 0.0,
+            pitch: 0.0,
+        });
 
     commands
         .spawn()
-        .insert(Transform::default().rotation_euler(1.5, 0.0, 0.0))
+        .insert(Transform::default().rotation_euler(1.5, -0.5, 0.0))
         .insert(DirectionalLight::default());
     commands
         .spawn()
         .insert(Transform::default())
-        .insert(DirectionalLight::default().shadows(true))
+        .insert(DirectionalLight::default().color(Vec3::splat(2.5)))
         .insert(Spin);
 }
 

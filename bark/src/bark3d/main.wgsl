@@ -3,33 +3,34 @@ enable wgpu_binding_array;
 const pi = radians(180.0);
 
 struct VsOut {
-  @builtin(position) pos: vec4<f32>,
-  @location(0) world_pos: vec3<f32>,
-  @location(1) uv: vec2<f32>,
-  @location(2) normal: vec3<f32>,
-  @location(3) tangent: vec4<f32>
+    @builtin(position) pos: vec4<f32>,
+    @location(0) world_pos: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) normal: vec3<f32>,
+    @location(3) tangent: vec4<f32>
 }
 
 struct Object {
-  transform: mat4x4<f32>,
-  normal_transform: mat3x3<f32>,
-  diffuse_color: vec3<f32>,
-  diffuse_id: u32,
-  pbr_values: vec3<f32>,
-  pbr_id: u32,
-  normal_id: u32
+    transform: mat4x4<f32>,
+    normal_transform: mat3x3<f32>,
+    diffuse_color: vec3<f32>,
+    diffuse_id: u32,
+    pbr_values: vec3<f32>,
+    pbr_id: u32,
+    normal_id: u32
 }
 
 struct FrameGlobals {
-  camera_mat: mat4x4<f32>,
-  shadow_caster_mat: mat4x4<f32>,
-  camera_pos: vec3<f32>
+    camera_view: mat4x4<f32>,
+    camera_proj: mat4x4<f32>,
+    shadow_source_mats: array<mat4x4<f32>, 4>,
+    camera_pos: vec3<f32>
 }
 
 struct Light {
-  direction: vec3<f32>,
-  tag: u32,
-  color: vec3<f32>
+    direction: vec3<f32>,
+    tag: u32,
+    color: vec3<f32>
 }
 
 var<immediate> object: Object;
@@ -45,82 +46,82 @@ var textures: binding_array<texture_2d<f32>>;
 var tex_sampler: sampler;
 
 @group(2) @binding(0)
-var shadow_map: texture_depth_2d;
+var shadow_map: texture_depth_2d_array;
 @group(2) @binding(1)
 var shadow_map_sampler: sampler_comparison;
 
 @vertex
 fn vs_main(
-  @location(0) pos: vec3<f32>,
-  @location(1) uv: vec2<f32>,
-  @location(2) normal: vec3<f32>,
-  @location(3) tangent: vec4<f32>,
+    @location(0) pos: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) normal: vec3<f32>,
+    @location(3) tangent: vec4<f32>,
 ) -> VsOut {
-  let world_pos = object.transform * vec4(pos, 1.0);
-  return VsOut(
-    frame.camera_mat * world_pos,
-    world_pos.xyz,
-    uv,
-    object.normal_transform * normal,
-    vec4(object.normal_transform * tangent.xyz, tangent.w)
-  );
+    let world_pos = object.transform * vec4(pos, 1.0);
+    return VsOut(
+        frame.camera_proj * frame.camera_view * world_pos,
+        world_pos.xyz,
+        uv,
+        object.normal_transform * normal,
+        vec4(object.normal_transform * tangent.xyz, tangent.w)
+    );
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-  let base_color = textureSample(textures[object.diffuse_id], tex_sampler, in.uv);
-  if base_color.a < 0.25 {
-    discard;
-  }
-  let diffuse_color = base_color.rgb * object.diffuse_color;
+    let base_color = textureSample(textures[object.diffuse_id], tex_sampler, in.uv);
+    if base_color.a < 0.25 {
+        discard;
+    }
+    let diffuse_color = base_color.rgb * object.diffuse_color;
 
-  var normal = normalize(in.normal);
-  if object.normal_id > 0 {
-    let normal_rg = textureSample(textures[object.normal_id], tex_sampler, in.uv).rg;
-    let n = normal_rg * 2.0 - vec2(1.0);
-    let z = sqrt(max(0.0, 1.0 - dot(n, n)));
-    let normal_ts = vec3(n, z);
+    var normal = normalize(in.normal);
+    if object.normal_id > 0 {
+        let normal_rg = textureSample(textures[object.normal_id], tex_sampler, in.uv).rg;
+        let n = normal_rg * 2.0 - vec2(1.0);
+        let z = sqrt(max(0.0, 1.0 - dot(n, n)));
+        let normal_ts = vec3(n, z);
 
-    let tangent = normalize(in.tangent.xyz);
-    let bitangent = normalize(cross(normal, tangent) * in.tangent.w);
-    let tbn = mat3x3(tangent, bitangent, normal);
-    normal = normalize(tbn * normal_ts);
-  }
+        let tangent = normalize(in.tangent.xyz);
+        let bitangent = normalize(cross(normal, tangent) * in.tangent.w);
+        let tbn = mat3x3(tangent, bitangent, normal);
+        normal = normalize(tbn * normal_ts);
+    }
 
-  let view_dir = normalize(frame.camera_pos - in.world_pos);
+    let view_dir = normalize(frame.camera_pos - in.world_pos);
 
-  let pbr = textureSample(textures[object.pbr_id], tex_sampler, in.uv).rgb * object.pbr_values;
-  let ao = pbr.r;
-  let roughness = clamp(pbr.g, 0.04, 1.0);
-  let metallic = pbr.b;
+    let pbr = textureSample(textures[object.pbr_id], tex_sampler, in.uv).rgb * object.pbr_values;
+    let ao = pbr.r;
+    let roughness = clamp(pbr.g, 0.04, 1.0);
+    let metallic = pbr.b;
 
-  let ambient = diffuse_color * 0.05 * ao;
+    let ambient = diffuse_color * 0.05 * ao;
 
-  let shadow = shadow_factor(in.world_pos);
-  
-  var light = ambient;
-  for (var i = 0u; lights[i].tag != 0; i++) {  
-    let light_dir = -lights[i].direction;
-    let half_dir = normalize(light_dir + view_dir);
-    let n_dot_l = max(dot(normal, light_dir), 0.0);
-    let n_dot_v = max(dot(normal, view_dir), 0.0);
-    let h_dot_v = max(dot(half_dir, view_dir), 0.0);
+    let shadow = shadow_factor(in.world_pos);
 
-    let f0 = mix(vec3(0.04), diffuse_color, metallic);
-    let d = distribution_ggx(normal, half_dir, roughness);
-    let g = geometry_smith(normal, view_dir, light_dir, roughness);
-    let f = fresnel_schlick(h_dot_v, f0);
+    var light = ambient;
+    for (var i = 0u; lights[i].tag != 0; i++) {  
+        let light_dir = -lights[i].direction;
+        let half_dir = normalize(light_dir + view_dir);
+        let n_dot_l = max(dot(normal, light_dir), 0.0);
+        let n_dot_v = max(dot(normal, view_dir), 0.0);
+        let h_dot_v = max(dot(half_dir, view_dir), 0.0);
 
-    let denom = max(4.0 * n_dot_l * n_dot_v, 0.001);
-    let specular = d * g * f / denom;
+        let f0 = mix(vec3(0.04), diffuse_color, metallic);
+        let d = distribution_ggx(normal, half_dir, roughness);
+        let g = geometry_smith(normal, view_dir, light_dir, roughness);
+        let f = fresnel_schlick(h_dot_v, f0);
 
-    let kd = (1.0 - f) * (1.0 - metallic);
-    let diffuse = kd * diffuse_color / pi;
+        let denom = max(4.0 * n_dot_l * n_dot_v, 0.001);
+        let specular = d * g * f / denom;
 
-    light += lights[i].color * (diffuse + specular) * n_dot_l * shadow;
-  }
-  
-  return vec4(tonemap_uncharted2(light), 1.0);
+        let kd = (1.0 - f) * (1.0 - metallic);
+        let diffuse = kd * diffuse_color / pi;
+
+        light += lights[i].color * (diffuse + specular) * n_dot_l * shadow;
+    }
+
+    return vec4(tonemap_uncharted2(light), 1.0);
 }
 
 fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
@@ -167,7 +168,17 @@ fn tonemap_uncharted2(color: vec3<f32>) -> vec3<f32> {
   }
 
 fn shadow_factor(world_pos: vec3<f32>) -> f32 {
-    let light_space_pos = frame.shadow_caster_mat * vec4(world_pos, 1.0);
+    let view_depth = -(frame.camera_view * vec4(world_pos, 1.0)).z;
+    let cascades = array(5.0, 10.0, 25.0, 100.0);
+    var cascade_index = 0;
+    while (cascade_index < 4) {
+        if (view_depth < cascades[cascade_index]) {
+            break;
+        }
+        cascade_index++;
+    }
+
+    let light_space_pos = frame.shadow_source_mats[cascade_index] * vec4(world_pos, 1.0);
     let uv = vec2(light_space_pos.x * 0.5 + 0.5, light_space_pos.y * -0.5 + 0.5);
     if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 {
         return 1.0;
@@ -180,7 +191,7 @@ fn shadow_factor(world_pos: vec3<f32>) -> f32 {
     for (var x = -1; x <= 1; x++) {
         for (var y = -1; y <= 1; y++) {
             let offset = vec2(f32(x), f32(y)) * texel_size;
-            shadow += textureSampleCompare(shadow_map,shadow_map_sampler, uv + offset, light_space_pos.z - 0.001);
+            shadow += textureSampleCompare(shadow_map, shadow_map_sampler, uv + offset, cascade_index, light_space_pos.z);
         }
     }
     return shadow / 9.0;

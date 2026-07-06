@@ -1,7 +1,8 @@
 struct FrameGlobals {
-  camera_mat: mat4x4<f32>,
-  shadow_caster_mat: mat4x4<f32>,
-  camera_pos: vec3<f32>
+    camera_view: mat4x4<f32>,
+    camera_proj: mat4x4<f32>,
+    shadow_source_mats: array<mat4x4<f32>, 4>,
+    camera_pos: vec3<f32>
 }
 
 var<immediate> object_transform: mat4x4<f32>;
@@ -10,7 +11,7 @@ var<immediate> object_transform: mat4x4<f32>;
 var<uniform> frame: FrameGlobals;
 
 @vertex
-fn vs_shadow(@location(0) pos: vec3<f32>) -> @builtin(position) vec4<f32> {
-    return frame.shadow_caster_mat * object_transform * vec4(pos, 1.0);
+fn vs_shadow(@location(0) pos: vec3<f32>, @builtin(view_index) index: u32) -> @builtin(position) vec4<f32> {
+    return frame.shadow_source_mats[index] * object_transform * vec4(pos, 1.0);
 }
 

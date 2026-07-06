@@ -6,6 +6,7 @@ use crate::gfx;
 use crate::gfx::mesh::MeshHandle;
 use crate::gfx::texture::TextureHandle;
 use crate::math::{EulerRot, Mat4, Quat, Vec3};
+use std::ops::Range;
 
 pub const UP: Vec3 = Vec3::Y;
 pub const FORWARD: Vec3 = Vec3::NEG_Z;
@@ -56,12 +57,8 @@ impl Transform {
         self
     }
 
-    pub fn as_transform_mat(&self) -> Mat4 {
+    pub fn as_mat4(&self) -> Mat4 {
         Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position)
-    }
-
-    pub fn as_view_mat(&self) -> Mat4 {
-        glam::camera::rh::view::look_to_mat4(self.position, self.rotation * FORWARD, UP)
     }
 }
 
@@ -77,16 +74,15 @@ impl Default for Transform {
 
 pub struct Camera {
     pub fov: f32,
+    pub clip_range: Range<f32>,
 }
 
 impl Camera {
     pub fn new(fov: f32) -> Self {
-        Camera { fov }
-    }
-
-    pub fn as_mat(&self, aspect_ratio: f32, transform: &Transform) -> Mat4 {
-        glam::camera::rh::proj::directx::perspective(self.fov, aspect_ratio, 0.01, 100.0)
-            * transform.as_view_mat()
+        Camera {
+            fov,
+            clip_range: 0.01..100.0,
+        }
     }
 }
 
@@ -167,8 +163,8 @@ impl PbrMode {
 }
 
 pub struct DirectionalLight {
-    color: Vec3,
-    shadows: bool,
+    pub color: Vec3,
+    pub shadows: bool,
 }
 
 impl DirectionalLight {

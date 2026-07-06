@@ -7,9 +7,15 @@ use crate::gfx::texture::TextureManager;
 use crate::gfx::{
     DEFAULT_BUFFER_SIZE, RenderContext, RenderFrame, SAMPLES, SURFACE_FORMAT, resize_buffer,
 };
-use crate::math::{Mat3A, Mat4, Vec3};
+use crate::math::{Mat3A, Mat4, Quat, Vec3};
 use crate::{cast_bytes, cast_bytes_slice};
 use std::mem;
+use std::num::NonZero;
+
+const SHADOW_RESOLUTION: u32 = 4096;
+const NUM_SHADOW_CASCADES: u32 = 4;
+const SHADOW_MULTIVIEW_MASK: NonZero<u32> =
+    NonZero::new(2u32.pow(NUM_SHADOW_CASCADES) - 1).unwrap();
 
 // todo: consider seperating out scene stuff
 pub struct RenderPipeline {
@@ -86,9 +92,9 @@ pub fn init_pipeline(
     let shadow_map_texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
         label: None,
         size: wgpu::Extent3d {
-            width: 4096,
-            height: 4096,
-            depth_or_array_layers: 1,
+            width: SHADOW_RESOLUTION,
+            height: SHADOW_RESOLUTION,
+            depth_or_array_layers: 4,
         },
         mip_level_count: 1,
         sample_count: 1,
@@ -100,6 +106,8 @@ pub fn init_pipeline(
     let shadow_map_view = shadow_map_texture.create_view(&wgpu::TextureViewDescriptor::default());
     let shadow_map_sampler = ctx.device.create_sampler(&wgpu::SamplerDescriptor {
         compare: Some(wgpu::CompareFunction::LessEqual),
+        min_filter: wgpu::FilterMode::Linear,
+        mag_filter: wgpu::FilterMode::Linear,
         ..Default::default()
     });
 
@@ -113,7 +121,7 @@ pub fn init_pipeline(
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Depth,
-                            view_dimension: wgpu::TextureViewDimension::D2,
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
                             multisampled: false,
                         },
                         count: None,
@@ -214,6 +222,15 @@ pub fn init_pipeline(
                 buffers: &[Some(Vertex::LAYOUT)],
             },
             fragment: None,
+            // primitive: wgpu::PrimitiveState {
+            //     topology: wgpu::PrimitiveTopology::TriangleList,
+            //     strip_index_format: None,
+            //     front_face: wgpu::FrontFace::default(),
+            //     cull_mode: Some(wgpu::Face::Front),
+            //     unclipped_depth: false,
+            //     polygon_mode: wgpu::PolygonMode::Fill,
+            //     conservative: false,
+            // },
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
@@ -227,7 +244,7 @@ pub fn init_pipeline(
                 },
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
+            multiview_mask: Some(SHADOW_MULTIVIEW_MASK),
             cache: None,
             label: None,
         });
@@ -309,7 +326,7 @@ pub fn main_pass(
     main_pass.set_index_buffer(meshes.index_buffer.slice(..), INDEX_FORMAT);
     for (_, (transform, object)) in scene_objects.iter() {
         if let Some(mesh) = meshes.get(&object.mesh) {
-            let transform_mat = transform.as_transform_mat();
+            let transform_mat = transform.as_mat4();
             let gpu_object = GPUObject {
                 transform: transform_mat,
                 normal_transform: Mat3A::from_mat4(transform_mat).inverse().transpose(),
@@ -336,7 +353,7 @@ pub fn shadow_pass(
     lights: Query<(&Transform, &DirectionalLight)>,
     mut scene_objects: Query<(&Transform, &RenderObject)>,
 ) {
-    if frame.surface.is_none() || get_shadow_caster(lights).is_none() {
+    if frame.surface.is_none() || get_shadow_source(lights).is_none() {
         return;
     }
 
@@ -355,7 +372,7 @@ pub fn shadow_pass(
         }),
         timestamp_writes: None,
         occlusion_query_set: None,
-        multiview_mask: None,
+        multiview_mask: Some(SHADOW_MULTIVIEW_MASK),
         label: None,
     });
     shadow_pass.set_pipeline(&pipeline.shadow_pipeline);
@@ -364,7 +381,7 @@ pub fn shadow_pass(
     shadow_pass.set_index_buffer(meshes.index_buffer.slice(..), INDEX_FORMAT);
     for (_, (transform, object)) in scene_objects.iter() {
         if let Some(mesh) = meshes.get(&object.mesh) {
-            let transform_mat = transform.as_transform_mat();
+            let transform_mat = transform.as_mat4();
             shadow_pass.set_immediates(0, unsafe { cast_bytes(&transform_mat) });
             shadow_pass.draw_indexed(mesh.index_range(), mesh.vertex_range().start as _, 0..1);
         }
@@ -428,23 +445,39 @@ pub fn extract_frame_globals(
         return;
     };
 
-    let shadow_caster_mat = match get_shadow_caster(lights) {
-        Some(transform) => {
-            // todo: calculate
-            glam::camera::rh::proj::directx::orthographic(-20.0, 20.0, -20.0, 20.0, 0.1, 50.0)
-                * glam::camera::rh::view::look_at_mat4(
-                    transform.rotation * -FORWARD * 20.0,
-                    Vec3::ZERO,
-                    UP,
-                )
-        }
-        None => Mat4::ZERO,
+    let aspect_ratio = surface.texture.width() as f32 / surface.texture.height() as f32;
+    let camera_view = glam::camera::rh::view::look_to_mat4(
+        camera_transform.position,
+        camera_transform.rotation * FORWARD,
+        UP,
+    );
+    let camera_proj = glam::camera::rh::proj::directx::perspective(
+        camera.fov,
+        aspect_ratio,
+        camera.clip_range.start,
+        camera.clip_range.end,
+    );
+    let cascades = [5.0, 10.0, 25.0, 100.0];
+
+    let shadow_source_mats = match get_shadow_source(lights) {
+        Some(transform) => cascades.map(|x| {
+            fit_shadow_source_mat(
+                glam::camera::rh::proj::directx::perspective(
+                    camera.fov,
+                    aspect_ratio,
+                    camera.clip_range.start,
+                    x,
+                ) * camera_view,
+                transform.rotation,
+            )
+        }),
+        None => [Mat4::ZERO; NUM_SHADOW_CASCADES as _],
     };
 
-    let aspect_ratio = surface.texture.width() as f32 / surface.texture.height() as f32;
     let frame_globals = GPUFrameGlobals {
-        camera_mat: camera.as_mat(aspect_ratio, camera_transform),
-        shadow_caster_mat,
+        camera_view,
+        camera_proj,
+        shadow_source_mats,
         camera_pos: camera_transform.position,
     };
     ctx.queue.write_buffer(&pipeline.uniform_buffer, 0, unsafe {
@@ -452,7 +485,7 @@ pub fn extract_frame_globals(
     });
 }
 
-fn get_shadow_caster<'a>(
+fn get_shadow_source<'a>(
     mut lights: Query<(&'a Transform, &DirectionalLight)>,
 ) -> Option<&'a Transform> {
     lights
@@ -498,6 +531,45 @@ impl Framebuffer {
     }
 }
 
+fn fit_shadow_source_mat(camera_mat: Mat4, light_rotation: Quat) -> Mat4 {
+    let ndc_corners = [
+        Vec3::new(-1.0, -1.0, 0.0),
+        Vec3::new(1.0, -1.0, 0.0),
+        Vec3::new(-1.0, 1.0, 0.0),
+        Vec3::new(1.0, 1.0, 0.0),
+        Vec3::new(-1.0, -1.0, 1.0),
+        Vec3::new(1.0, -1.0, 1.0),
+        Vec3::new(-1.0, 1.0, 1.0),
+        Vec3::new(1.0, 1.0, 1.0),
+    ];
+
+    let camera_inv = camera_mat.inverse();
+    let world_corners = ndc_corners.map(|x| camera_inv.project_point3(x));
+    let world_center = world_corners.iter().sum::<Vec3>() / ndc_corners.len() as f32;
+
+    let light_view = glam::camera::rh::view::look_at_mat4(
+        world_center - light_rotation * FORWARD * 100.0,
+        world_center,
+        UP,
+    );
+
+    let mut min = Vec3::INFINITY;
+    let mut max = Vec3::NEG_INFINITY;
+    for x in world_corners {
+        let pos = light_view.transform_point3(x);
+        min = min.min(pos);
+        max = max.max(pos);
+    }
+    let pad = Vec3::new(0.0, 0.0, 10.0);
+    min -= pad;
+    max += pad;
+
+    let light_proj =
+        glam::camera::rh::proj::directx::orthographic(min.x, max.x, min.y, max.y, -max.z, -min.z);
+
+    light_proj * light_view
+}
+
 #[repr(C)]
 struct GPUObject {
     transform: Mat4,
@@ -511,8 +583,9 @@ struct GPUObject {
 
 #[repr(C)]
 struct GPUFrameGlobals {
-    camera_mat: Mat4,
-    shadow_caster_mat: Mat4,
+    camera_view: Mat4,
+    camera_proj: Mat4,
+    shadow_source_mats: [Mat4; NUM_SHADOW_CASCADES as _],
     camera_pos: Vec3,
 }
 

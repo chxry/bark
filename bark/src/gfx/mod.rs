@@ -48,10 +48,12 @@ pub fn init_renderer(window: Res<WindowHandle>, mut commands: Commands, _: MainT
         label: None,
         required_features: wgpu::Features::TEXTURE_BINDING_ARRAY
             | wgpu::Features::TEXTURE_COMPRESSION_BC
-            | wgpu::Features::IMMEDIATES,
+            | wgpu::Features::IMMEDIATES
+            | wgpu::Features::MULTIVIEW,
         required_limits: wgpu::Limits {
             max_binding_array_elements_per_shader_stage: 2048,
             max_immediate_size: 256,
+            max_multiview_view_count: 8,
             ..Default::default()
         },
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
