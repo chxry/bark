@@ -1,9 +1,4 @@
-struct FrameGlobals {
-    camera_view: mat4x4<f32>,
-    camera_proj: mat4x4<f32>,
-    shadow_source_mats: array<mat4x4<f32>, 4>,
-    camera_pos: vec3<f32>
-}
+import package::util::FrameGlobals;
 
 var<immediate> object_transform: mat4x4<f32>;
 

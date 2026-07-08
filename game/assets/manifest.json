@@ -82,9 +82,14 @@
       "mode": "normal"
     }
   },
-  "sphere.obj": {
-    "ty": "mesh",
-    "hash": "8b6cec9afe394493",
+  "shaders/main.wesl": {
+    "ty": "wesl",
+    "hash": "81b2377c18b0c582",
+    "options": null
+  },
+  "shaders/shadow.wesl": {
+    "ty": "wesl",
+    "hash": "f91df871fb7f7960",
     "options": null
   }
 }

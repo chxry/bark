@@ -1,5 +1,6 @@
 use super::{Camera, DirectionalLight, FORWARD, RenderObject, Transform};
 use crate::app::ResizeEvent;
+use crate::assets::{Assets, Plaintext};
 use crate::bark3d::UP;
 use crate::ecs::{Commands, Observer, Query, Res, ResMut};
 use crate::gfx::mesh::{INDEX_FORMAT, MeshManager, Vertex};
@@ -30,6 +31,7 @@ pub struct RenderPipeline {
 
 pub fn init_pipeline(
     ctx: Res<RenderContext>,
+    mut assets: ResMut<Assets>,
     textures: Res<TextureManager>,
     mut commands: Commands,
 ) {
@@ -151,7 +153,16 @@ pub fn init_pipeline(
 
     let main_shader = ctx
         .device
-        .create_shader_module(wgpu::include_wgsl!("main.wgsl"));
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(
+                (&assets
+                    .load_blocking::<Plaintext>("shaders/main.wesl")
+                    .get()
+                    .0)
+                    .into(),
+            ),
+        });
     let main_pipeline_layout = ctx
         .device
         .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -203,7 +214,16 @@ pub fn init_pipeline(
 
     let shadow_shader = ctx
         .device
-        .create_shader_module(wgpu::include_wgsl!("shadow.wgsl"));
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(
+                (&assets
+                    .load_blocking::<Plaintext>("shaders/shadow.wesl")
+                    .get()
+                    .0)
+                    .into(),
+            ),
+        });
     let shadow_pipeline_layout =
         ctx.device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -222,15 +242,6 @@ pub fn init_pipeline(
                 buffers: &[Some(Vertex::LAYOUT)],
             },
             fragment: None,
-            // primitive: wgpu::PrimitiveState {
-            //     topology: wgpu::PrimitiveTopology::TriangleList,
-            //     strip_index_format: None,
-            //     front_face: wgpu::FrontFace::default(),
-            //     cull_mode: Some(wgpu::Face::Front),
-            //     unclipped_depth: false,
-            //     polygon_mode: wgpu::PolygonMode::Fill,
-            //     conservative: false,
-            // },
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,

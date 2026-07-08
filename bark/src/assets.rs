@@ -1,11 +1,10 @@
 use crate::App;
-use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::any::{self, Any};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
-use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, Weak};
 use tracing::{debug, trace_span};
 
@@ -48,7 +47,7 @@ impl Assets {
         }
     }
 
-    pub fn load<T: Asset>(&mut self, id: &str) -> Handle<T> {
+    fn load_impl<T: Asset>(&mut self, id: &str, blocking: bool) -> Handle<T> {
         match self.storage.get(id).and_then(|h| h.upgrade()) {
             Some(h) => Handle(h.downcast().unwrap()),
             None => {
@@ -57,12 +56,14 @@ impl Assets {
                 let path = self.cache_dir.join(hex::encode(entry.hash.to_be_bytes()));
                 let handle = Handle(Arc::new((id.to_owned(), OnceLock::new())));
 
-                let handle2 = handle.clone();
-                self.thread_pool.spawn(move || {
-                    let _span =
-                        trace_span!("load asset", id = handle2.id(), type = any::type_name::<T>());
-                    handle2.set(T::read(File::open(path).unwrap()));
-                });
+                if blocking {
+                    handle.load(&path);
+                } else {
+                    let handle2 = handle.clone();
+                    self.thread_pool.spawn(move || {
+                        handle2.load(&path);
+                    });
+                }
 
                 self.storage.insert(
                     id.to_owned(),
@@ -72,6 +73,14 @@ impl Assets {
             }
         }
     }
+
+    pub fn load<T: Asset>(&mut self, id: &str) -> Handle<T> {
+        self.load_impl(id, false)
+    }
+
+    pub fn load_blocking<T: Asset>(&mut self, id: &str) -> Handle<T> {
+        self.load_impl(id, true)
+    }
 }
 
 pub trait Asset: Any + Send + Sync {
@@ -80,7 +89,7 @@ pub trait Asset: Any + Send + Sync {
 
 pub struct Handle<T>(Arc<(String, OnceLock<T>)>);
 
-impl<T> Handle<T> {
+impl<T: Asset> Handle<T> {
     pub fn id(&self) -> &str {
         &self.0.0
     }
@@ -97,8 +106,9 @@ impl<T> Handle<T> {
         self.try_get().unwrap()
     }
 
-    fn set(&self, data: T) {
-        let _ = self.0.1.set(data);
+    fn load(&self, path: &Path) {
+        let _span = trace_span!("load asset", id = self.id(), type = any::type_name::<T>());
+        let _ = self.0.1.set(T::read(File::open(path).unwrap()));
     }
 }
 
@@ -134,8 +144,10 @@ pub fn hash_to_string(hash: u64) -> String {
     hex::encode(hash.to_be_bytes())
 }
 
-pub trait AssetProcessor: Send + Sync {
-    type Options: Serialize + DeserializeOwned;
+pub struct Plaintext(pub String);
 
-    fn process<R: Read, W: Write>(&self, src: R, out: W, opts: Self::Options);
+impl Asset for Plaintext {
+    fn read<R: Read>(reader: R) -> Self {
+        Self(io::read_to_string(reader).unwrap())
+    }
 }

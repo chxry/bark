@@ -1,15 +1,16 @@
-use bark::assets::AssetProcessor;
+use crate::AssetProcessor;
 use bark::cast_bytes_vec;
 use bark::gfx::mesh::{Index, Mesh, Vertex};
 use bark::math::{Vec2, Vec3, Vec4};
 use std::io::{BufReader, Read, Write};
+use std::path::Path;
 
 pub struct MeshProcessor;
 
 impl AssetProcessor for MeshProcessor {
     type Options = ();
 
-    fn process<R: Read, W: Write>(&self, src: R, out: W, _: Self::Options) {
+    fn process<R: Read, W: Write>(&self, src: R, _: &Path, out: W, _: Self::Options) {
         let obj = obj::load_obj::<obj::TexturedVertex, _, Index>(BufReader::new(src)).unwrap();
         let mut vertices = obj
             .vertices
@@ -76,8 +77,6 @@ impl AssetProcessor for MeshProcessor {
             Mesh {
                 vertex_data: cast_bytes_vec(vertices),
                 index_data: cast_bytes_vec(indices),
-                // vertex_data: crate::cast_bytes_slice(&vertices).to_vec(),
-                // index_data: crate::cast_bytes_slice(&indices).to_vec(),
             }
         };
         mesh.write(out);

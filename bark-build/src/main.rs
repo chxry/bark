@@ -1,12 +1,16 @@
 mod mesh;
 mod texture;
+mod wesl;
 
-use bark::assets::{self, AssetProcessor, hash_to_string};
+use bark::assets::{self, hash_to_string};
 use rayon::prelude::*;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::{env, process};
 use twox_hash::XxHash3_64;
 
@@ -16,6 +20,7 @@ fn main() {
             let mut assets = AssetProcessors::new(dir);
             assets.register("texture", texture::TextureProcessor);
             assets.register("mesh", mesh::MeshProcessor);
+            assets.register("wesl", wesl::WeslProcessor);
             assets.run();
         }
         None => {
@@ -72,6 +77,7 @@ impl AssetProcessors {
                 let processor = self.processors.get(&entry.ty).unwrap();
                 processor.process_erased(
                     &src_data,
+                    &src_path,
                     File::create(&cache_path).unwrap(),
                     &entry.options,
                 );
@@ -101,14 +107,20 @@ impl AssetProcessors {
     }
 }
 
+pub trait AssetProcessor: Send + Sync {
+    type Options: Serialize + DeserializeOwned;
+
+    fn process<R: Read, W: Write>(&self, src: R, src_path: &Path, out: W, opts: Self::Options);
+}
+
 trait ErasedAssetProcessor: Send + Sync {
-    fn process_erased(&self, src: &[u8], out: File, opts: &serde_json::Value);
+    fn process_erased(&self, src: &[u8], src_path: &Path, out: File, opts: &serde_json::Value);
 }
 
 impl<T: AssetProcessor> ErasedAssetProcessor for T {
-    fn process_erased(&self, src: &[u8], out: File, opts: &serde_json::Value) {
+    fn process_erased(&self, src: &[u8], src_path: &Path, out: File, opts: &serde_json::Value) {
         let opts = serde_json::from_value(opts.clone()).unwrap();
-        self.process(src, out, opts);
+        self.process(src, src_path, out, opts);
     }
 }
 

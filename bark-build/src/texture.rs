@@ -1,9 +1,10 @@
-use bark::assets::AssetProcessor;
+use crate::AssetProcessor;
 use bark::gfx::texture::{CompressionFormat, Texture, TextureMode};
 use image::imageops::{self, FilterType};
 use intel_tex_2::{RSurface, RgSurface, RgbaSurface, bc4, bc5, bc7};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
+use std::path::Path;
 
 pub struct TextureProcessor;
 
@@ -18,7 +19,7 @@ impl AssetProcessor for TextureProcessor {
     type Options = TextureOptions;
 
     // todo: respect TextureMode, only downsample needed channels
-    fn process<R: Read, W: Write>(&self, mut src: R, out: W, opts: Self::Options) {
+    fn process<R: Read, W: Write>(&self, mut src: R, _: &Path, out: W, opts: Self::Options) {
         let mut bytes = Vec::new();
         src.read_to_end(&mut bytes).unwrap();
 

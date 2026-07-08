@@ -13,17 +13,20 @@ use std::process::Command;
 
 fn main() {
     let assets_dir = env!("CARGO_MANIFEST_DIR").to_owned() + "/assets";
-    Command::new("cargo")
+    if !Command::new("cargo")
         .args(["run", "--release", "--bin", "bark-build", &assets_dir])
         .status()
-        .unwrap();
+        .unwrap()
+        .success()
+    {
+        panic!()
+    }
 
     let mut app = bark::App::new();
     gfx::init(&mut app);
     assets::init(&mut app, assets_dir);
     bark3d::init(&mut app);
-    app.world
-        .insert_system::<app::Startup>(scene2.into_system());
+    app.world.insert_system::<app::Startup>(scene.into_system());
     app.world.insert_system::<app::Update>(spinny.into_system());
     app.world
         .insert_system::<app::Update>(update_camera.into_system());
