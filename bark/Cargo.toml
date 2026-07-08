@@ -4,7 +4,7 @@ version = "0.2.0"
 edition = "2024"
 
 [dependencies]
-glam = "0.33"
+glam = { version = "0.33", features = ["serde"] }
 hex = { version = "0.4", features = ["serde"] }
 pollster = "0.4"
 rayon = "1.12"

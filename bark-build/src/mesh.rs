@@ -1,18 +1,16 @@
-use crate::AssetProcessor;
+use crate::{AssetProcessor, AssetProcessorContext};
 use bark::cast_bytes_vec;
 use bark::gfx::mesh::{Index, Mesh, Vertex};
 use bark::math::{Vec2, Vec3, Vec4};
-use std::io::{BufReader, Read, Write};
-use std::path::Path;
 
 pub struct MeshProcessor;
 
 impl AssetProcessor for MeshProcessor {
     type Options = ();
 
-    fn process<R: Read, W: Write>(&self, src: R, _: &Path, out: W, _: Self::Options) {
-        let obj = obj::load_obj::<obj::TexturedVertex, _, Index>(BufReader::new(src)).unwrap();
-        let mut vertices = obj
+    fn process(&self, ctx: AssetProcessorContext, _: Self::Options) {
+        let obj = obj::load_obj::<obj::TexturedVertex, _, Index>(ctx.src_data).unwrap();
+        let vertices = obj
             .vertices
             .into_iter()
             .map(|v| Vertex {
@@ -22,63 +20,66 @@ impl AssetProcessor for MeshProcessor {
                 tangent: Vec4::ZERO,
             })
             .collect::<Vec<_>>();
-        let indices = obj.indices;
 
-        let mut tangents = vec![Vec3::ZERO; vertices.len()];
-        let mut bitangents = vec![Vec3::ZERO; vertices.len()];
+        let mesh = process_mesh(vertices, obj.indices);
+        mesh.write(ctx.emit_main());
+    }
+}
 
-        for tri in indices.chunks_exact(3) {
-            let i0 = tri[0] as usize;
-            let i1 = tri[1] as usize;
-            let i2 = tri[2] as usize;
+pub fn process_mesh(mut vertices: Vec<Vertex>, indices: Vec<Index>) -> Mesh {
+    let mut tangents = vec![Vec3::ZERO; vertices.len()];
+    let mut bitangents = vec![Vec3::ZERO; vertices.len()];
 
-            let v0 = &vertices[i0];
-            let v1 = &vertices[i1];
-            let v2 = &vertices[i2];
+    for tri in indices.chunks_exact(3) {
+        let i0 = tri[0] as usize;
+        let i1 = tri[1] as usize;
+        let i2 = tri[2] as usize;
 
-            let dp1 = v1.pos - v0.pos;
-            let dp2 = v2.pos - v0.pos;
+        let v0 = &vertices[i0];
+        let v1 = &vertices[i1];
+        let v2 = &vertices[i2];
 
-            let duv1 = v1.uv - v0.uv;
-            let duv2 = v2.uv - v0.uv;
+        let dp1 = v1.pos - v0.pos;
+        let dp2 = v2.pos - v0.pos;
 
-            let r = 1.0 / (duv1.x * duv2.y - duv1.y * duv2.x);
+        let duv1 = v1.uv - v0.uv;
+        let duv2 = v2.uv - v0.uv;
 
-            let tangent = (dp1 * duv2.y - dp2 * duv1.y) * r;
-            let bitangent = (dp2 * duv1.x - dp1 * duv2.x) * r;
+        let r = 1.0 / (duv1.x * duv2.y - duv1.y * duv2.x);
 
-            tangents[i0] += tangent;
-            tangents[i1] += tangent;
-            tangents[i2] += tangent;
+        let tangent = (dp1 * duv2.y - dp2 * duv1.y) * r;
+        let bitangent = (dp2 * duv1.x - dp1 * duv2.x) * r;
 
-            bitangents[i0] += bitangent;
-            bitangents[i1] += bitangent;
-            bitangents[i2] += bitangent;
-        }
+        tangents[i0] += tangent;
+        tangents[i1] += tangent;
+        tangents[i2] += tangent;
 
-        for (i, v) in vertices.iter_mut().enumerate() {
-            let n = v.normal;
-            let t = tangents[i];
+        bitangents[i0] += bitangent;
+        bitangents[i1] += bitangent;
+        bitangents[i2] += bitangent;
+    }
 
-            let tangent = (t - n * n.dot(t)).normalize();
+    for (i, v) in vertices.iter_mut().enumerate() {
+        let n = v.normal;
+        let t = tangents[i];
 
-            let b = bitangents[i];
-            let handedness = if n.cross(tangent).dot(b) < 0.0 {
-                -1.0
-            } else {
-                1.0
-            };
+        let tangent = (t - n * n.dot(t)).normalize();
 
-            v.tangent = tangent.extend(handedness);
-        }
-
-        // safety: `Vertex` is valid for `cast_bytes_vec`
-        let mesh = unsafe {
-            Mesh {
-                vertex_data: cast_bytes_vec(vertices),
-                index_data: cast_bytes_vec(indices),
-            }
+        let b = bitangents[i];
+        let handedness = if n.cross(tangent).dot(b) < 0.0 {
+            -1.0
+        } else {
+            1.0
         };
-        mesh.write(out);
+
+        v.tangent = tangent.extend(handedness);
+    }
+
+    // safety: `Vertex` is valid for `cast_bytes_vec`
+    unsafe {
+        Mesh {
+            vertex_data: cast_bytes_vec(vertices),
+            index_data: cast_bytes_vec(indices),
+        }
     }
 }

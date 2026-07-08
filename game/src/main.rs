@@ -41,17 +41,12 @@ fn scene(
     mut meshes: ResMut<MeshManager>,
     mut commands: Commands,
 ) {
-    commands.spawn().insert(Transform::default()).insert(
-        RenderObject::new(meshes.add(assets.load("potted_plant_02_leaves.obj")))
-            .diffuse_texture(textures.add(assets.load("potted_plant_02_leaves_diff_4k.png")))
-            .normal_texture(textures.add(assets.load("potted_plant_02_leaves_nor_gl_4k.png")))
-            .pbr_texture(textures.add(assets.load("potted_plant_02_leaves_arm_4k.png"))),
-    );
-    commands.spawn().insert(Transform::default()).insert(
-        RenderObject::new(meshes.add(assets.load("potted_plant_02_pot.obj")))
-            .diffuse_texture(textures.add(assets.load("potted_plant_02_pot_diff_4k.png")))
-            .normal_texture(textures.add(assets.load("potted_plant_02_pot_nor_gl_4k.png")))
-            .pbr_texture(textures.add(assets.load("potted_plant_02_pot_arm_4k.png"))),
+    bark3d::gltf::spawn_gltf(
+        "potted_plant_02.gltf",
+        &mut assets,
+        &mut textures,
+        &mut meshes,
+        &mut commands,
     );
     commands
         .spawn()

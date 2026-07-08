@@ -1,10 +1,8 @@
-use crate::AssetProcessor;
+use crate::{AssetProcessor, AssetProcessorContext};
 use bark::gfx::texture::{CompressionFormat, Texture, TextureMode};
 use image::imageops::{self, FilterType};
 use intel_tex_2::{RSurface, RgSurface, RgbaSurface, bc4, bc5, bc7};
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Write};
-use std::path::Path;
 
 pub struct TextureProcessor;
 
@@ -19,67 +17,67 @@ impl AssetProcessor for TextureProcessor {
     type Options = TextureOptions;
 
     // todo: respect TextureMode, only downsample needed channels
-    fn process<R: Read, W: Write>(&self, mut src: R, _: &Path, out: W, opts: Self::Options) {
-        let mut bytes = Vec::new();
-        src.read_to_end(&mut bytes).unwrap();
+    fn process(&self, ctx: AssetProcessorContext, opts: Self::Options) {
+        let image = image::load_from_memory(ctx.src_data).unwrap().to_rgba8();
+        let texture = process_texture(image, &opts);
+        texture.write(ctx.emit_main());
+    }
+}
 
-        let image = image::load_from_memory(&bytes).unwrap().to_rgba8();
-
-        let mut mip_levels = vec![image];
-        if opts.generate_mipmaps {
-            let mut w = mip_levels[0].width();
-            let mut h = mip_levels[0].height();
-            while w > 4 && h > 4 {
-                w = (w / 2).max(4);
-                h = (h / 2).max(4);
-                mip_levels.push(imageops::resize(
-                    mip_levels.last().unwrap(),
-                    w,
-                    h,
-                    FilterType::Lanczos3,
-                ));
-            }
+pub fn process_texture(img: image::RgbaImage, opts: &TextureOptions) -> Texture {
+    let mut mip_levels = vec![img];
+    if opts.generate_mipmaps {
+        let mut w = mip_levels[0].width();
+        let mut h = mip_levels[0].height();
+        while w > 4 && h > 4 {
+            w = (w / 2).max(4);
+            h = (h / 2).max(4);
+            mip_levels.push(imageops::resize(
+                mip_levels.last().unwrap(),
+                w,
+                h,
+                FilterType::Lanczos3,
+            ));
         }
+    }
 
-        let mut data = vec![];
-        for level in &mip_levels {
-            let mip_data = match opts.compression {
-                CompressionFormat::Bc7 => &bc7::compress_blocks(
-                    &bc7::alpha_ultra_fast_settings(),
-                    &RgbaSurface {
-                        data: level,
-                        width: level.width(),
-                        height: level.height(),
-                        stride: level.width() * 4,
-                    },
-                ),
-                CompressionFormat::Bc5 => &bc5::compress_blocks(&RgSurface {
-                    data: &extract_rg(level),
+    let mut data = vec![];
+    for level in &mip_levels {
+        let mip_data = match opts.compression {
+            CompressionFormat::Bc7 => &bc7::compress_blocks(
+                &bc7::alpha_ultra_fast_settings(),
+                &RgbaSurface {
+                    data: level,
                     width: level.width(),
                     height: level.height(),
-                    stride: level.width() * 2,
-                }),
-                CompressionFormat::Bc4 => &bc4::compress_blocks(&RSurface {
-                    data: &extract_r(level),
-                    width: level.width(),
-                    height: level.height(),
-                    stride: level.width(),
-                }),
+                    stride: level.width() * 4,
+                },
+            ),
+            CompressionFormat::Bc5 => &bc5::compress_blocks(&RgSurface {
+                data: &extract_rg(level),
+                width: level.width(),
+                height: level.height(),
+                stride: level.width() * 2,
+            }),
+            CompressionFormat::Bc4 => &bc4::compress_blocks(&RSurface {
+                data: &extract_r(level),
+                width: level.width(),
+                height: level.height(),
+                stride: level.width(),
+            }),
 
-                CompressionFormat::None => level.as_raw(),
-            };
-            data.extend(mip_data);
-        }
-
-        let texture = Texture {
-            width: mip_levels[0].width(),
-            height: mip_levels[0].height(),
-            mip_count: mip_levels.len() as u8,
-            mode: opts.mode,
-            compression: opts.compression,
-            data,
+            CompressionFormat::None => level.as_raw(),
         };
-        texture.write(out);
+        data.extend(mip_data);
+    }
+
+    Texture {
+        width: mip_levels[0].width(),
+        height: mip_levels[0].height(),
+        mip_count: mip_levels.len() as u8,
+        mode: opts.mode,
+        compression: opts.compression,
+        data,
     }
 }
 

@@ -1,3 +1,4 @@
+mod gltf;
 mod mesh;
 mod texture;
 mod wesl;
@@ -9,7 +10,6 @@ use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::{env, process};
 use twox_hash::XxHash3_64;
@@ -21,6 +21,7 @@ fn main() {
             assets.register("texture", texture::TextureProcessor);
             assets.register("mesh", mesh::MeshProcessor);
             assets.register("wesl", wesl::WeslProcessor);
+            assets.register("gltf", gltf::GltfProcessor);
             assets.run();
         }
         None => {
@@ -76,9 +77,11 @@ impl AssetProcessors {
                 build_log("Processing", &format!("{} ({})", id, entry.ty));
                 let processor = self.processors.get(&entry.ty).unwrap();
                 processor.process_erased(
-                    &src_data,
-                    &src_path,
-                    File::create(&cache_path).unwrap(),
+                    AssetProcessorContext {
+                        src_data: &src_data,
+                        src_path: &src_path,
+                        out_path: &cache_path,
+                    },
                     &entry.options,
                 );
                 Some(hash)
@@ -107,20 +110,41 @@ impl AssetProcessors {
     }
 }
 
+pub struct AssetProcessorContext<'a> {
+    pub src_data: &'a [u8],
+    pub src_path: &'a Path,
+    pub out_path: &'a Path,
+}
+
+impl AssetProcessorContext<'_> {
+    pub fn emit_main(&self) -> File {
+        File::create(self.out_path).unwrap()
+    }
+
+    pub fn emit_sub(&self, name: &str) -> File {
+        File::create(self.out_path.parent().unwrap().join(format!(
+            "{}#{}",
+            self.out_path.file_name().unwrap().display(),
+            name
+        )))
+        .unwrap()
+    }
+}
+
 pub trait AssetProcessor: Send + Sync {
     type Options: Serialize + DeserializeOwned;
 
-    fn process<R: Read, W: Write>(&self, src: R, src_path: &Path, out: W, opts: Self::Options);
+    fn process(&self, ctx: AssetProcessorContext, opts: Self::Options);
 }
 
 trait ErasedAssetProcessor: Send + Sync {
-    fn process_erased(&self, src: &[u8], src_path: &Path, out: File, opts: &serde_json::Value);
+    fn process_erased(&self, ctx: AssetProcessorContext, opts: &serde_json::Value);
 }
 
 impl<T: AssetProcessor> ErasedAssetProcessor for T {
-    fn process_erased(&self, src: &[u8], src_path: &Path, out: File, opts: &serde_json::Value) {
+    fn process_erased(&self, ctx: AssetProcessorContext, opts: &serde_json::Value) {
         let opts = serde_json::from_value(opts.clone()).unwrap();
-        self.process(src, src_path, out, opts);
+        self.process(ctx, opts);
     }
 }
 

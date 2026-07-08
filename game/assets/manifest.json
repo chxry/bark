@@ -18,18 +18,11 @@
     "hash": "a3f4b15b6aaae510",
     "options": null
   },
-  "potted_plant_02_leaves.obj": {
-    "ty": "mesh",
-    "hash": "2f8063823106746a",
-    "options": null
-  },
-  "potted_plant_02_leaves_arm_4k.png": {
-    "ty": "texture",
-    "hash": "ef45faea4e776087",
+  "potted_plant_02.gltf": {
+    "ty": "gltf",
+    "hash": "43412eee4bc90015",
     "options": {
-      "compression": "bc7",
-      "generate_mipmaps": true,
-      "mode": "linear"
+      "textures": {}
     }
   },
   "potted_plant_02_leaves_diff_4k.png": {
@@ -41,50 +34,54 @@
       "mode": "srgb"
     }
   },
-  "potted_plant_02_leaves_nor_gl_4k.png": {
+  "potted_plant_02_leaves_nor_gl_4k.jpg": {
     "ty": "texture",
-    "hash": "e2e4fb023cb5dc62",
+    "hash": "01a0bb39837e919d",
     "options": {
       "compression": "bc5",
       "generate_mipmaps": true,
       "mode": "normal"
     }
   },
-  "potted_plant_02_pot.obj": {
-    "ty": "mesh",
-    "hash": "02dba583c8ebc887",
-    "options": null
-  },
-  "potted_plant_02_pot_arm_4k.png": {
+  "potted_plant_02_leaves_rough_4k.jpg": {
     "ty": "texture",
-    "hash": "af57e2cc97deb0ff",
+    "hash": "7fc1077ed04b1a68",
     "options": {
       "compression": "bc7",
       "generate_mipmaps": true,
       "mode": "linear"
     }
   },
-  "potted_plant_02_pot_diff_4k.png": {
+  "potted_plant_02_pot_diff_4k.jpg": {
     "ty": "texture",
-    "hash": "efbaaad999ff5878",
+    "hash": "ef3ab629b8f3b39d",
     "options": {
       "compression": "bc7",
       "generate_mipmaps": true,
       "mode": "srgb"
     }
   },
-  "potted_plant_02_pot_nor_gl_4k.png": {
+  "potted_plant_02_pot_nor_gl_4k.jpg": {
     "ty": "texture",
-    "hash": "a62efc96928af282",
+    "hash": "80015da26a93c830",
     "options": {
       "compression": "bc5",
       "generate_mipmaps": true,
       "mode": "normal"
     }
   },
+  "potted_plant_02_pot_rough_4k.jpg": {
+    "ty": "texture",
+    "hash": "094c793320640d96",
+    "options": {
+      "compression": "bc7",
+      "generate_mipmaps": true,
+      "mode": "linear"
+    }
+  },
   "shaders/main.wesl": {
     "ty": "wesl",
-    "hash": "81b2377c18b0c582",
+    "hash": "9170bc215b75b606",
     "options": null
   },
   "shaders/shadow.wesl": {

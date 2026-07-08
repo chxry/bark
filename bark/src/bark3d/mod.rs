@@ -1,3 +1,4 @@
+pub mod gltf;
 mod render;
 
 use crate::app::{self, App};
@@ -6,6 +7,7 @@ use crate::gfx;
 use crate::gfx::mesh::MeshHandle;
 use crate::gfx::texture::TextureHandle;
 use crate::math::{EulerRot, Mat4, Quat, Vec3};
+use serde::{Deserialize, Serialize};
 use std::ops::Range;
 
 pub const UP: Vec3 = Vec3::Y;
@@ -30,6 +32,7 @@ pub fn init(app: &mut App) {
         .insert_system::<app::ResizeEvent>(render::resize_framebuffer.into_system());
 }
 
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct Transform {
     pub position: Vec3,
     pub rotation: Quat,
@@ -157,7 +160,9 @@ impl PbrMode {
                 roughness,
                 metallic,
             } => Vec3::new(1.0, *roughness, *metallic),
-            _ => Vec3::ONE,
+            // _ => Vec3::ONE,
+            // todo: yeah
+            _ => Vec3::new(1.0, 1.0, 0.0),
         }
     }
 }
