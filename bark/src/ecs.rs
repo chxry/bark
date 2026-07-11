@@ -639,6 +639,10 @@ macro_rules! impl_query {
                     }
                 }
             }
+
+            pub fn get(&mut self, id: EntityId) -> Option<($($P,)*)> {
+                todo!()
+            }
         }
 
         impl<$($I: Iterator<Item = (EntityId, $P)>),*, $($P: QueryData),*> Iterator for QueryIter<($(Peekable<$I>,)*), ($($P,)*)> {

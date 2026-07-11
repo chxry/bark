@@ -1,14 +1,14 @@
-use super::{Camera, DirectionalLight, FORWARD, RenderObject, Transform};
+use super::{Camera, DirectionalLight, FORWARD, RenderObject, SkySettings, Transform, UP};
 use crate::app::ResizeEvent;
-use crate::assets::{Assets, Plaintext};
-use crate::bark3d::UP;
+use crate::assets::Assets;
 use crate::ecs::{Commands, Observer, Query, Res, ResMut};
 use crate::gfx::mesh::{INDEX_FORMAT, MeshManager, Vertex};
 use crate::gfx::texture::TextureManager;
 use crate::gfx::{
-    DEFAULT_BUFFER_SIZE, RenderContext, RenderFrame, SAMPLES, SURFACE_FORMAT, resize_buffer,
+    DEFAULT_BUFFER_SIZE, RenderContext, RenderFrame, SAMPLES, SURFACE_FORMAT, load_shader,
+    resize_buffer,
 };
-use crate::math::{Mat3A, Mat4, Quat, Vec3};
+use crate::math::{Mat3A, Mat4, Vec3};
 use crate::{cast_bytes, cast_bytes_slice};
 use std::mem;
 use std::num::NonZero;
@@ -27,6 +27,7 @@ pub struct RenderPipeline {
     shadow_map_bind_group: wgpu::BindGroup,
     main_pipeline: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
+    sky_pipeline: wgpu::RenderPipeline,
 }
 
 pub fn init_pipeline(
@@ -108,8 +109,8 @@ pub fn init_pipeline(
     let shadow_map_view = shadow_map_texture.create_view(&wgpu::TextureViewDescriptor::default());
     let shadow_map_sampler = ctx.device.create_sampler(&wgpu::SamplerDescriptor {
         compare: Some(wgpu::CompareFunction::LessEqual),
-        min_filter: wgpu::FilterMode::Linear,
-        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Nearest,
+        mag_filter: wgpu::FilterMode::Nearest,
         ..Default::default()
     });
 
@@ -151,18 +152,7 @@ pub fn init_pipeline(
         ],
     });
 
-    let main_shader = ctx
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: None,
-            source: wgpu::ShaderSource::Wgsl(
-                (&assets
-                    .load_blocking::<Plaintext>("shaders/main.wesl")
-                    .get()
-                    .0)
-                    .into(),
-            ),
-        });
+    let main_shader = load_shader(&ctx.device, &mut assets, "shaders/main.wesl");
     let main_pipeline_layout = ctx
         .device
         .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -212,18 +202,7 @@ pub fn init_pipeline(
             label: None,
         });
 
-    let shadow_shader = ctx
-        .device
-        .create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: None,
-            source: wgpu::ShaderSource::Wgsl(
-                (&assets
-                    .load_blocking::<Plaintext>("shaders/shadow.wesl")
-                    .get()
-                    .0)
-                    .into(),
-            ),
-        });
+    let shadow_shader = load_shader(&ctx.device, &mut assets, "shaders/shadow.wesl");
     let shadow_pipeline_layout =
         ctx.device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -260,6 +239,47 @@ pub fn init_pipeline(
             label: None,
         });
 
+    let sky_shader = load_shader(&ctx.device, &mut assets, "shaders/sky.wesl");
+    let sky_pipeline_layout = ctx
+        .device
+        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            bind_group_layouts: &[Some(&scene_bind_group_layout)],
+            immediate_size: 0,
+            label: None,
+        });
+    let sky_pipeline = ctx
+        .device
+        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            layout: Some(&sky_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &sky_shader,
+                entry_point: Some("vs_sky"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &sky_shader,
+                entry_point: Some("fs_sky"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: SURFACE_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: SAMPLES,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+
+            multiview_mask: None,
+            cache: None,
+            label: None,
+        });
+
     let surface_config = ctx.surface.get_configuration().unwrap();
     commands.insert_resource(Framebuffer::new(
         &ctx.device,
@@ -274,6 +294,7 @@ pub fn init_pipeline(
         shadow_map_bind_group,
         main_pipeline,
         shadow_pipeline,
+        sky_pipeline,
     });
 }
 
@@ -307,12 +328,7 @@ pub fn main_pass(
             resolve_target: Some(surface_view),
             depth_slice: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color {
-                    r: 0.5,
-                    g: 0.6,
-                    b: 0.8,
-                    a: 1.0,
-                }),
+                load: wgpu::LoadOp::Load,
                 store: wgpu::StoreOp::Store,
             },
         })],
@@ -361,10 +377,9 @@ pub fn shadow_pass(
     frame: Res<RenderFrame>,
     pipeline: Res<RenderPipeline>,
     meshes: Res<MeshManager>,
-    lights: Query<(&Transform, &DirectionalLight)>,
     mut scene_objects: Query<(&Transform, &RenderObject)>,
 ) {
-    if frame.surface.is_none() || get_shadow_source(lights).is_none() {
+    if frame.surface.is_none() {
         return;
     }
 
@@ -402,10 +417,48 @@ pub fn shadow_pass(
     frame.submit(encoder.finish());
 }
 
+pub fn sky_pass(
+    ctx: Res<RenderContext>,
+    frame: Res<RenderFrame>,
+    pipeline: Res<RenderPipeline>,
+    framebuffer: Res<Framebuffer>,
+) {
+    let Some((_, surface_view)) = frame.surface.as_ref() else {
+        return;
+    };
+
+    let mut encoder = ctx
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let mut sky_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &framebuffer.color_view,
+            resolve_target: Some(surface_view),
+            depth_slice: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+        label: None,
+    });
+    sky_pass.set_pipeline(&pipeline.sky_pipeline);
+    sky_pass.set_bind_group(0, &pipeline.scene_bind_group, &[]);
+    sky_pass.draw(0..3, 0..1);
+    drop(sky_pass);
+
+    frame.submit(encoder.finish());
+}
+
 pub fn extract_lights(
     ctx: Res<RenderContext>,
     frame: Res<RenderFrame>,
     mut pipeline: ResMut<RenderPipeline>,
+    sky: Res<SkySettings>,
     mut lights: Query<(&Transform, &DirectionalLight)>,
 ) {
     let lights = lights
@@ -415,11 +468,18 @@ pub fn extract_lights(
             tag: 1,
             color: l.color,
         })
-        .chain([GPULight {
-            direction: Vec3::ZERO,
-            tag: 0,
-            color: Vec3::ZERO,
-        }])
+        .chain([
+            GPULight {
+                direction: sky.sun_dir,
+                tag: 1,
+                color: Vec3::splat(2.0),
+            },
+            GPULight {
+                direction: Vec3::ZERO,
+                tag: 0,
+                color: Vec3::ZERO,
+            },
+        ])
         .collect::<Vec<_>>();
     let light_buf_size = (lights.len() * mem::size_of::<GPULight>()) as _;
     if pipeline.light_buffer.size() < light_buf_size {
@@ -446,8 +506,8 @@ pub fn extract_frame_globals(
     ctx: Res<RenderContext>,
     frame: Res<RenderFrame>,
     pipeline: ResMut<RenderPipeline>,
+    sky: Res<SkySettings>,
     mut cameras: Query<(&Transform, &Camera)>,
-    lights: Query<(&Transform, &DirectionalLight)>,
 ) {
     let Some((surface, _)) = frame.surface.as_ref() else {
         return;
@@ -470,39 +530,28 @@ pub fn extract_frame_globals(
     );
     let cascades = [5.0, 10.0, 25.0, 100.0];
 
-    let shadow_source_mats = match get_shadow_source(lights) {
-        Some(transform) => cascades.map(|x| {
-            fit_shadow_source_mat(
-                glam::camera::rh::proj::directx::perspective(
-                    camera.fov,
-                    aspect_ratio,
-                    camera.clip_range.start,
-                    x,
-                ) * camera_view,
-                transform.rotation,
-            )
-        }),
-        None => [Mat4::ZERO; NUM_SHADOW_CASCADES as _],
-    };
+    let shadow_source_mats = cascades.map(|x| {
+        fit_shadow_source_mat(
+            glam::camera::rh::proj::directx::perspective(
+                camera.fov,
+                aspect_ratio,
+                camera.clip_range.start,
+                x,
+            ) * camera_view,
+            sky.sun_dir,
+        )
+    });
 
     let frame_globals = GPUFrameGlobals {
         camera_view,
         camera_proj,
+        camera_view_proj_inv: (camera_proj * camera_view).inverse(),
         shadow_source_mats,
         camera_pos: camera_transform.position,
     };
     ctx.queue.write_buffer(&pipeline.uniform_buffer, 0, unsafe {
         cast_bytes(&frame_globals)
     });
-}
-
-fn get_shadow_source<'a>(
-    mut lights: Query<(&'a Transform, &DirectionalLight)>,
-) -> Option<&'a Transform> {
-    lights
-        .iter()
-        .filter_map(|(_, (t, l))| l.shadows.then_some(t))
-        .next()
 }
 
 pub struct Framebuffer {
@@ -542,7 +591,7 @@ impl Framebuffer {
     }
 }
 
-fn fit_shadow_source_mat(camera_mat: Mat4, light_rotation: Quat) -> Mat4 {
+fn fit_shadow_source_mat(camera_mat: Mat4, light_dir: Vec3) -> Mat4 {
     let ndc_corners = [
         Vec3::new(-1.0, -1.0, 0.0),
         Vec3::new(1.0, -1.0, 0.0),
@@ -558,11 +607,8 @@ fn fit_shadow_source_mat(camera_mat: Mat4, light_rotation: Quat) -> Mat4 {
     let world_corners = ndc_corners.map(|x| camera_inv.project_point3(x));
     let world_center = world_corners.iter().sum::<Vec3>() / ndc_corners.len() as f32;
 
-    let light_view = glam::camera::rh::view::look_at_mat4(
-        world_center - light_rotation * FORWARD * 100.0,
-        world_center,
-        UP,
-    );
+    let light_view =
+        glam::camera::rh::view::look_at_mat4(world_center - light_dir * 100.0, world_center, UP);
 
     let mut min = Vec3::INFINITY;
     let mut max = Vec3::NEG_INFINITY;
@@ -596,6 +642,7 @@ struct GPUObject {
 struct GPUFrameGlobals {
     camera_view: Mat4,
     camera_proj: Mat4,
+    camera_view_proj_inv: Mat4,
     shadow_source_mats: [Mat4; NUM_SHADOW_CASCADES as _],
     camera_pos: Vec3,
 }

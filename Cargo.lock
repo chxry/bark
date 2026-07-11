@@ -870,6 +870,7 @@ name = "game"
 version = "0.1.0"
 dependencies = [
  "bark",
+ "bark-build",
  "tracing",
 ]
 

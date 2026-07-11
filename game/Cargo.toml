@@ -6,3 +6,6 @@ edition = "2024"
 [dependencies]
 bark = { path = "../bark" }
 tracing = "0.1"
+
+[build-dependencies]
+bark-build = { path = "../bark-build" }

@@ -88,5 +88,10 @@
     "ty": "wesl",
     "hash": "f91df871fb7f7960",
     "options": null
+  },
+  "shaders/sky.wesl": {
+    "ty": "wesl",
+    "hash": "949338038e5c9e90",
+    "options": null
   }
 }

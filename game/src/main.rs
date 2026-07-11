@@ -9,19 +9,9 @@ use bark::gfx::texture::TextureManager;
 use bark::math::{EulerRot, Quat, Vec3};
 use bark::{app, assets, gfx};
 use std::f32::consts::FRAC_PI_2;
-use std::process::Command;
 
 fn main() {
     let assets_dir = env!("CARGO_MANIFEST_DIR").to_owned() + "/assets";
-    if !Command::new("cargo")
-        .args(["run", "--release", "--bin", "bark-build", &assets_dir])
-        .status()
-        .unwrap()
-        .success()
-    {
-        panic!()
-    }
-
     let mut app = bark::App::new();
     gfx::init(&mut app);
     assets::init(&mut app, assets_dir);
@@ -53,25 +43,17 @@ fn scene(
         .insert(
             Transform::default()
                 .position(Vec3::new(2.0, 0.0, 0.0))
-                .scale(Vec3::splat(0.25)),
+                .scale(Vec3::splat(0.2)),
         )
         .insert(
             RenderObject::new(meshes.add(assets.load("garfield.obj")))
                 .diffuse_texture(textures.add(assets.load("garfield.png"))),
-        );
+        )
+        .insert(Spin);
     commands
         .spawn()
         .insert(Transform::default().scale(Vec3::splat(25.0)))
         .insert(RenderObject::new(meshes.add(assets.load("plane.obj"))));
-    commands
-        .spawn()
-        .insert(Transform::default().rotation_euler(0.0, -0.5, 0.0))
-        .insert(
-            DirectionalLight::default()
-                .shadows(true)
-                .color(Vec3::splat(2.5)),
-        )
-        .insert(Spin);
     commands
         .spawn()
         .insert(Transform::default().position(Vec3::new(0.0, 2.5, 5.0)))

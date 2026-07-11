@@ -11,24 +11,15 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::{env, process};
 use twox_hash::XxHash3_64;
 
-fn main() {
-    match env::args().nth(1) {
-        Some(dir) => {
-            let mut assets = AssetProcessors::new(dir);
-            assets.register("texture", texture::TextureProcessor);
-            assets.register("mesh", mesh::MeshProcessor);
-            assets.register("wesl", wesl::WeslProcessor);
-            assets.register("gltf", gltf::GltfProcessor);
-            assets.run();
-        }
-        None => {
-            eprintln!("usage: bark-build <assets-dir>");
-            process::exit(1);
-        }
-    }
+pub fn build_default<P: Into<PathBuf>>(assets_dir: P) {
+    let mut assets = AssetProcessors::new(assets_dir);
+    assets.register("texture", texture::TextureProcessor);
+    assets.register("mesh", mesh::MeshProcessor);
+    assets.register("wesl", wesl::WeslProcessor);
+    assets.register("gltf", gltf::GltfProcessor);
+    assets.run();
 }
 
 struct AssetProcessors {
@@ -157,8 +148,9 @@ fn hash_asset(data: &[u8], opts: &serde_json::Value) -> u64 {
 
 fn build_log(status: &str, msg: &str) {
     println!(
-        // "cargo::warning=\r\x1b[K\x1b[1;32m{:>12}\x1b[0m {}",
-        "\x1b[1;32m{:>12}\x1b[0m {}",
-        status, msg
+        "cargo::warning=\r\x1b[K\x1b[1;32m{:>12}\x1b[0m {}",
+        // "\x1b[1;32m{:>12}\x1b[0m {}",
+        status,
+        msg
     );
 }

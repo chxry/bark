@@ -2,7 +2,7 @@ pub mod gltf;
 mod render;
 
 use crate::app::{self, App};
-use crate::ecs::IntoSystem;
+use crate::ecs::{EntityId, IntoSystem};
 use crate::gfx;
 use crate::gfx::mesh::MeshHandle;
 use crate::gfx::texture::TextureHandle;
@@ -19,10 +19,14 @@ pub fn init(app: &mut App) {
         .insert_system::<app::Startup>(render::init_pipeline.after(gfx::init_renderer));
     app.world
         .insert_system::<app::Render>(render::shadow_pass.with(gfx::during_frame));
+    app.world
+        .insert_system::<app::Render>(render::sky_pass.with(gfx::during_frame));
+
     app.world.insert_system::<app::Render>(
         render::main_pass
             .with(gfx::during_frame)
-            .after(render::shadow_pass),
+            .after(render::shadow_pass)
+            .after(render::sky_pass),
     );
     app.world
         .insert_system::<app::Render>(render::extract_lights.with(gfx::during_frame));
@@ -30,6 +34,10 @@ pub fn init(app: &mut App) {
         .insert_system::<app::Render>(render::extract_frame_globals.with(gfx::during_frame));
     app.world
         .insert_system::<app::ResizeEvent>(render::resize_framebuffer.into_system());
+
+    app.world.insert_resource(SkySettings {
+        sun_dir: Vec3::new(1.0, -1.0, 1.0).normalize(),
+    })
 }
 
 #[derive(Copy, Clone, Serialize, Deserialize)]
@@ -64,6 +72,12 @@ impl Transform {
         Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position)
     }
 }
+
+pub struct Parent(pub EntityId);
+
+pub struct GlobalTransform(Transform);
+
+impl GlobalTransform {}
 
 impl Default for Transform {
     fn default() -> Self {
@@ -169,7 +183,6 @@ impl PbrMode {
 
 pub struct DirectionalLight {
     pub color: Vec3,
-    pub shadows: bool,
 }
 
 impl DirectionalLight {
@@ -177,18 +190,14 @@ impl DirectionalLight {
         self.color = color;
         self
     }
-
-    pub fn shadows(mut self, shadows: bool) -> Self {
-        self.shadows = shadows;
-        self
-    }
 }
 
 impl Default for DirectionalLight {
     fn default() -> Self {
-        Self {
-            color: Vec3::ONE,
-            shadows: false,
-        }
+        Self { color: Vec3::ONE }
     }
+}
+
+pub struct SkySettings {
+    pub sun_dir: Vec3,
 }

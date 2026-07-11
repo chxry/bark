@@ -161,3 +161,9 @@ impl Asset for Plaintext {
         Self(io::read_to_string(reader).unwrap())
     }
 }
+
+impl AsRef<str> for Plaintext {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
