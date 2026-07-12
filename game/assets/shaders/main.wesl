@@ -66,9 +66,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
     let view_dir = normalize(frame.camera_pos - in.world_pos);
 
-    // todo: yeah
-    // let pbr = textureSample(textures[object.pbr_id], tex_sampler, in.uv).rgb * object.pbr_values;
-    let pbr = vec3(1.0, textureSample(textures[object.pbr_id], tex_sampler, in.uv).g, 1.0) * object.pbr_values;
+    let pbr = textureSample(textures[object.pbr_id], tex_sampler, in.uv).rgb * object.pbr_values;
     let ao = pbr.r;
     let roughness = clamp(pbr.g, 0.04, 1.0);
     let metallic = pbr.b;

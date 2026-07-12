@@ -1,8 +1,7 @@
-pub mod gltf;
 mod render;
 
 use crate::app::{self, App};
-use crate::ecs::{EntityId, IntoSystem};
+use crate::ecs::IntoSystem;
 use crate::gfx;
 use crate::gfx::mesh::MeshHandle;
 use crate::gfx::texture::TextureHandle;
@@ -72,12 +71,6 @@ impl Transform {
         Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position)
     }
 }
-
-pub struct Parent(pub EntityId);
-
-pub struct GlobalTransform(Transform);
-
-impl GlobalTransform {}
 
 impl Default for Transform {
     fn default() -> Self {
@@ -174,8 +167,6 @@ impl PbrMode {
                 roughness,
                 metallic,
             } => Vec3::new(1.0, *roughness, *metallic),
-            // _ => Vec3::ONE,
-            // todo: yeah
             _ => Vec3::new(1.0, 1.0, 0.0),
         }
     }

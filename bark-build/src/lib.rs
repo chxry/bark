@@ -1,4 +1,3 @@
-mod gltf;
 mod mesh;
 mod texture;
 mod wesl;
@@ -18,7 +17,6 @@ pub fn build_default<P: Into<PathBuf>>(assets_dir: P) {
     assets.register("texture", texture::TextureProcessor);
     assets.register("mesh", mesh::MeshProcessor);
     assets.register("wesl", wesl::WeslProcessor);
-    assets.register("gltf", gltf::GltfProcessor);
     assets.run();
 }
 
@@ -68,11 +66,9 @@ impl AssetProcessors {
                 build_log("Processing", &format!("{} ({})", id, entry.ty));
                 let processor = self.processors.get(&entry.ty).unwrap();
                 processor.process_erased(
-                    AssetProcessorContext {
-                        src_data: &src_data,
-                        src_path: &src_path,
-                        out_path: &cache_path,
-                    },
+                    &src_data,
+                    &src_path,
+                    File::create(cache_path).unwrap(),
                     &entry.options,
                 );
                 Some(hash)
@@ -101,41 +97,26 @@ impl AssetProcessors {
     }
 }
 
-pub struct AssetProcessorContext<'a> {
-    pub src_data: &'a [u8],
-    pub src_path: &'a Path,
-    pub out_path: &'a Path,
-}
-
-impl AssetProcessorContext<'_> {
-    pub fn emit_main(&self) -> File {
-        File::create(self.out_path).unwrap()
-    }
-
-    pub fn emit_sub(&self, name: &str) -> File {
-        File::create(self.out_path.parent().unwrap().join(format!(
-            "{}#{}",
-            self.out_path.file_name().unwrap().display(),
-            name
-        )))
-        .unwrap()
-    }
-}
-
 pub trait AssetProcessor: Send + Sync {
     type Options: Serialize + DeserializeOwned;
 
-    fn process(&self, ctx: AssetProcessorContext, opts: Self::Options);
+    fn process(&self, src_data: &[u8], src_path: &Path, out: File, opts: Self::Options);
 }
 
 trait ErasedAssetProcessor: Send + Sync {
-    fn process_erased(&self, ctx: AssetProcessorContext, opts: &serde_json::Value);
+    fn process_erased(&self, src_data: &[u8], src_path: &Path, out: File, opts: &serde_json::Value);
 }
 
 impl<T: AssetProcessor> ErasedAssetProcessor for T {
-    fn process_erased(&self, ctx: AssetProcessorContext, opts: &serde_json::Value) {
+    fn process_erased(
+        &self,
+        src_data: &[u8],
+        src_path: &Path,
+        out: File,
+        opts: &serde_json::Value,
+    ) {
         let opts = serde_json::from_value(opts.clone()).unwrap();
-        self.process(ctx, opts);
+        self.process(src_data, src_path, out, opts);
     }
 }
 
@@ -149,8 +130,10 @@ fn hash_asset(data: &[u8], opts: &serde_json::Value) -> u64 {
 fn build_log(status: &str, msg: &str) {
     println!(
         "cargo::warning=\r\x1b[K\x1b[1;32m{:>12}\x1b[0m {}",
-        // "\x1b[1;32m{:>12}\x1b[0m {}",
-        status,
-        msg
+        status, msg
     );
+}
+
+fn build_warn(msg: &str) {
+    println!("cargo::warning=\r\x1b[K\x1b[1;33mwarning\x1b[97m: {}", msg);
 }

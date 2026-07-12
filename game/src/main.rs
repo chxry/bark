@@ -31,13 +31,20 @@ fn scene(
     mut meshes: ResMut<MeshManager>,
     mut commands: Commands,
 ) {
-    bark3d::gltf::spawn_gltf(
-        "potted_plant_02.gltf",
-        &mut assets,
-        &mut textures,
-        &mut meshes,
-        &mut commands,
+    let pot_transform = Transform::default().scale(Vec3::splat(2.0));
+    commands.spawn().insert(pot_transform).insert(
+        RenderObject::new(meshes.add(assets.load("potted_plant_02_pot.fbx")))
+            .diffuse_texture(textures.add(assets.load("potted_plant_02_pot_diff_4k.png")))
+            .normal_texture(textures.add(assets.load("potted_plant_02_pot_nor_gl_4k.png")))
+            .pbr_texture(textures.add(assets.load("potted_plant_02_pot_arm_4k.png"))),
     );
+    commands.spawn().insert(pot_transform).insert(
+        RenderObject::new(meshes.add(assets.load("potted_plant_02_leaves.fbx")))
+            .diffuse_texture(textures.add(assets.load("potted_plant_02_leaves_diff_4k.png")))
+            .normal_texture(textures.add(assets.load("potted_plant_02_leaves_nor_gl_4k.png")))
+            .pbr_texture(textures.add(assets.load("potted_plant_02_leaves_arm_4k.png"))),
+    );
+
     commands
         .spawn()
         .insert(

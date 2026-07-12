@@ -336,7 +336,6 @@ pub trait System: Send + Sync {
     fn flush(&mut self, world: &mut World);
 }
 
-// todo: have a way to reuse combined orderings
 pub trait IntoSystem<P>: Sized {
     fn into_system(self) -> Box<dyn System>;
 
@@ -603,6 +602,7 @@ pub trait QueryData: Sized {
     /// safety: must only be used according to `declare_access`
     /// todo: we hand out this iterator with no lifetimes linking it to the World! probably scary
     unsafe fn get_iter(world: *mut World) -> impl Iterator<Item = (EntityId, Self)>;
+    unsafe fn get_entity(world: *mut World, entity: EntityId) -> Option<Self>;
 }
 
 pub struct QueryIter<S, P> {
@@ -640,8 +640,9 @@ macro_rules! impl_query {
                 }
             }
 
-            pub fn get(&mut self, id: EntityId) -> Option<($($P,)*)> {
-                todo!()
+            pub fn get(&mut self, entity: EntityId) -> Option<($($P,)*)> {
+                // safety: &mut gives `QueryIter` exclusive access over what we requested in `declare_access`
+                Some(($(unsafe {$P::get_entity(self.world, entity) }?,)*))
             }
         }
 
@@ -698,6 +699,10 @@ impl<T: Any + Send + Sync> QueryData for &T {
             .into_iter()
             .flatten()
     }
+
+    unsafe fn get_entity(world: *mut World, entity: EntityId) -> Option<Self> {
+        unsafe { (*world).get_component_store() }.and_then(|x| x.get(entity))
+    }
 }
 
 impl<T: Any + Send + Sync> QueryData for &mut T {
@@ -718,6 +723,10 @@ impl<T: Any + Send + Sync> QueryData for &mut T {
             .map(|x| x.iter_mut())
             .into_iter()
             .flatten()
+    }
+
+    unsafe fn get_entity(world: *mut World, entity: EntityId) -> Option<Self> {
+        unsafe { (*world).get_component_store_mut() }.and_then(|x| x.get_mut(entity))
     }
 }
 

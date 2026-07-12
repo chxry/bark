@@ -186,7 +186,7 @@ pub fn during_frame(sys: Box<dyn System>) -> Box<dyn System> {
     sys.after(begin_frame).before(submit_frame)
 }
 
-pub fn load_shader<'a>(device: &wgpu::Device, assets: &mut Assets, id: &str) -> wgpu::ShaderModule {
+pub fn load_shader(device: &wgpu::Device, assets: &mut Assets, id: &str) -> wgpu::ShaderModule {
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: None,
         source: wgpu::ShaderSource::Wgsl((&assets.load_blocking::<Plaintext>(id).get().0).into()),

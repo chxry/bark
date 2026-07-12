@@ -52,18 +52,8 @@ impl Assets {
             Some(h) => Handle(h.downcast().unwrap()),
             None => {
                 debug!("load asset {:?}", id);
-                let (base, fragment) = match id.split_once("#") {
-                    Some((b, f)) => (b, Some(f)),
-                    None => (id, None),
-                };
-                let entry = self.manifest.0.get(base).unwrap();
-
-                let base_filename = hex::encode(entry.hash.to_be_bytes());
-                let path = self.cache_dir.join(match fragment {
-                    Some(f) => format!("{}#{}", base_filename, f),
-                    None => base_filename,
-                });
-
+                let entry = self.manifest.0.get(id).unwrap();
+                let path = self.cache_dir.join(hex::encode(entry.hash.to_be_bytes()));
                 let handle = Handle(Arc::new((id.to_owned(), OnceLock::new())));
 
                 if blocking {

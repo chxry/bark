@@ -5,11 +5,10 @@ edition = "2024"
 
 [dependencies]
 bark = { path = "../bark" }
-gltf = "1.4"
 image = "0.25"
 intel_tex_2 = "0.5"
-obj-rs = "0.7"
 rayon = "1.12"
+russimp-ng = { version = "3.2", features = ["static-link"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 twox-hash = "2.1.2"
