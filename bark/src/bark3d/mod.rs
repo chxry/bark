@@ -96,28 +96,16 @@ impl Camera {
     }
 }
 
-pub struct RenderObject {
-    pub mesh: MeshHandle,
+pub struct StaticMesh(pub MeshHandle);
+
+pub struct Material {
     pub diffuse_color: Vec3,
     pub diffuse_tex: Option<TextureHandle>,
     pub normal_tex: Option<TextureHandle>,
     pub pbr: PbrMode,
 }
 
-impl RenderObject {
-    pub fn new(mesh: MeshHandle) -> Self {
-        Self {
-            mesh,
-            diffuse_color: Vec3::ONE,
-            diffuse_tex: None,
-            normal_tex: None,
-            pbr: PbrMode::Values {
-                roughness: 0.5,
-                metallic: 0.0,
-            },
-        }
-    }
-
+impl Material {
     pub fn diffuse_color(mut self, color: Vec3) -> Self {
         self.diffuse_color = color;
         self
@@ -144,6 +132,20 @@ impl RenderObject {
             metallic,
         };
         self
+    }
+}
+
+impl Default for Material {
+    fn default() -> Self {
+        Self {
+            diffuse_color: Vec3::ONE,
+            diffuse_tex: None,
+            normal_tex: None,
+            pbr: PbrMode::Values {
+                roughness: 0.5,
+                metallic: 0.0,
+            },
+        }
     }
 }
 

@@ -3,9 +3,8 @@ use crate::assets::{Asset, Handle};
 use crate::ecs::{Res, ResMut};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::num::NonZero;
-use strum::FromRepr;
 use tracing::{debug, error};
 use wgpu::util::DeviceExt;
 
@@ -213,44 +212,24 @@ pub fn upload_textures(ctx: Res<RenderContext>, mut textures: ResMut<TextureMana
     textures.upload_pending(&ctx.device, &ctx.queue);
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Texture {
     pub width: u32,
     pub height: u32,
     pub mip_count: u8,
     pub mode: TextureMode,
     pub compression: CompressionFormat,
+    #[serde(with = "serde_bytes")]
     pub data: Vec<u8>,
 }
 
-impl Texture {
-    pub fn write<W: Write>(&self, mut writer: W) {
-        writer.write_all(&self.width.to_le_bytes()).unwrap();
-        writer.write_all(&self.height.to_le_bytes()).unwrap();
-        writer.write_all(&[self.mip_count]).unwrap();
-        writer.write_all(&[self.mode as u8]).unwrap();
-        writer.write_all(&[self.compression as u8]).unwrap();
-        writer.write_all(&self.data).unwrap();
-    }
-}
-
 impl Asset for Texture {
-    fn read<R: Read>(mut reader: R) -> Self {
-        let mut header = [0; 11];
-        let mut data = vec![];
-        reader.read_exact(&mut header).unwrap();
-        reader.read_to_end(&mut data).unwrap();
-        Self {
-            width: u32::from_le_bytes(header[0..4].try_into().unwrap()),
-            height: u32::from_le_bytes(header[4..8].try_into().unwrap()),
-            mip_count: header[8],
-            mode: TextureMode::from_repr(header[9]).unwrap(),
-            compression: CompressionFormat::from_repr(header[10]).unwrap(),
-            data,
-        }
+    fn read<R: Read>(reader: R) -> Self {
+        bincode::deserialize_from(reader).unwrap()
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize, FromRepr)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[repr(u8)]
 pub enum TextureMode {
@@ -259,7 +238,7 @@ pub enum TextureMode {
     Normal,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize, FromRepr)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[repr(u8)]
 pub enum CompressionFormat {

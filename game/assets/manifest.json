@@ -1,6 +1,6 @@
 {
   "garfield.obj": {
-    "ty": "mesh",
+    "ty": "model",
     "hash": "c650ac4dc7edca2c",
     "options": null
   },
@@ -14,12 +14,12 @@
     }
   },
   "plane.obj": {
-    "ty": "mesh",
+    "ty": "model",
     "hash": "a3f4b15b6aaae510",
     "options": null
   },
   "potted_plant_02_leaves.fbx": {
-    "ty": "mesh",
+    "ty": "model",
     "hash": "4c6d9a235b06263f",
     "options": null
   },
@@ -51,7 +51,7 @@
     }
   },
   "potted_plant_02_pot.fbx": {
-    "ty": "mesh",
+    "ty": "model",
     "hash": "efb54e491c2b5c51",
     "options": null
   },

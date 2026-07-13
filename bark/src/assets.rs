@@ -87,7 +87,7 @@ pub trait Asset: Any + Send + Sync {
     fn read<R: Read>(reader: R) -> Self;
 }
 
-pub struct Handle<T>(Arc<(String, OnceLock<T>)>);
+pub struct Handle<T: Asset>(Arc<(String, OnceLock<T>)>);
 
 impl<T: Asset> Handle<T> {
     pub fn id(&self) -> &str {
@@ -102,6 +102,7 @@ impl<T: Asset> Handle<T> {
         self.0.1.get()
     }
 
+    #[track_caller]
     pub fn get(&self) -> &T {
         self.try_get().unwrap()
     }
@@ -112,7 +113,7 @@ impl<T: Asset> Handle<T> {
     }
 }
 
-impl<T> Clone for Handle<T> {
+impl<T: Asset> Clone for Handle<T> {
     fn clone(&self) -> Self {
         Handle(self.0.clone())
     }

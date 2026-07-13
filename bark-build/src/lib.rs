@@ -1,4 +1,4 @@
-mod mesh;
+mod model;
 mod texture;
 mod wesl;
 
@@ -15,7 +15,7 @@ use twox_hash::XxHash3_64;
 pub fn build_default<P: Into<PathBuf>>(assets_dir: P) {
     let mut assets = AssetProcessors::new(assets_dir);
     assets.register("texture", texture::TextureProcessor);
-    assets.register("mesh", mesh::MeshProcessor);
+    assets.register("model", model::ModelProcessor);
     assets.register("wesl", wesl::WeslProcessor);
     assets.run();
 }

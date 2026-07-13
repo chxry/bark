@@ -1,4 +1,4 @@
-use super::{Camera, DirectionalLight, FORWARD, RenderObject, SkySettings, Transform, UP};
+use super::{Camera, DirectionalLight, FORWARD, Material, SkySettings, StaticMesh, Transform, UP};
 use crate::app::ResizeEvent;
 use crate::assets::Assets;
 use crate::ecs::{Commands, Observer, Query, Res, ResMut};
@@ -313,7 +313,7 @@ pub fn main_pass(
     framebuffer: Res<Framebuffer>,
     textures: Res<TextureManager>,
     meshes: Res<MeshManager>,
-    mut scene_objects: Query<(&Transform, &RenderObject)>,
+    mut static_meshes: Query<(&Transform, &StaticMesh, &Material)>,
 ) {
     let Some((_, surface_view)) = frame.surface.as_ref() else {
         return;
@@ -351,17 +351,17 @@ pub fn main_pass(
     main_pass.set_bind_group(2, &pipeline.shadow_map_bind_group, &[]);
     main_pass.set_vertex_buffer(0, meshes.vertex_buffer.slice(..));
     main_pass.set_index_buffer(meshes.index_buffer.slice(..), INDEX_FORMAT);
-    for (_, (transform, object)) in scene_objects.iter() {
-        if let Some(mesh) = meshes.get(&object.mesh) {
+    for (_, (transform, mesh, material)) in static_meshes.iter() {
+        if let Some(mesh) = meshes.get(&mesh.0) {
             let transform_mat = transform.as_mat4();
             let gpu_object = GPUObject {
                 transform: transform_mat,
                 normal_transform: Mat3A::from_mat4(transform_mat).inverse().transpose(),
-                diffuse_color: object.diffuse_color,
-                diffuse_id: object.diffuse_tex.map_or(0, |t| textures.get(t)),
-                pbr_values: object.pbr.get_arm_values(),
-                pbr_id: object.pbr.get_tex().map_or(0, |t| textures.get(t)),
-                normal_id: object.normal_tex.map_or(0, |t| textures.get(t)),
+                diffuse_color: material.diffuse_color,
+                diffuse_id: material.diffuse_tex.map_or(0, |t| textures.get(t)),
+                pbr_values: material.pbr.get_arm_values(),
+                pbr_id: material.pbr.get_tex().map_or(0, |t| textures.get(t)),
+                normal_id: material.normal_tex.map_or(0, |t| textures.get(t)),
             };
             main_pass.set_immediates(0, unsafe { cast_bytes(&gpu_object) });
             main_pass.draw_indexed(mesh.index_range(), mesh.vertex_range().start as _, 0..1);
@@ -377,7 +377,7 @@ pub fn shadow_pass(
     frame: Res<RenderFrame>,
     pipeline: Res<RenderPipeline>,
     meshes: Res<MeshManager>,
-    mut scene_objects: Query<(&Transform, &RenderObject)>,
+    mut static_meshes: Query<(&Transform, &StaticMesh, &Material)>,
 ) {
     if frame.surface.is_none() {
         return;
@@ -405,8 +405,8 @@ pub fn shadow_pass(
     shadow_pass.set_bind_group(0, &pipeline.scene_bind_group, &[]);
     shadow_pass.set_vertex_buffer(0, meshes.vertex_buffer.slice(..));
     shadow_pass.set_index_buffer(meshes.index_buffer.slice(..), INDEX_FORMAT);
-    for (_, (transform, object)) in scene_objects.iter() {
-        if let Some(mesh) = meshes.get(&object.mesh) {
+    for (_, (transform, mesh, _)) in static_meshes.iter() {
+        if let Some(mesh) = meshes.get(&mesh.0) {
             let transform_mat = transform.as_mat4();
             shadow_pass.set_immediates(0, unsafe { cast_bytes(&transform_mat) });
             shadow_pass.draw_indexed(mesh.index_range(), mesh.vertex_range().start as _, 0..1);

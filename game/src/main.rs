@@ -2,7 +2,7 @@ use bark::app::winit::keyboard::KeyCode;
 use bark::app::winit::window::CursorGrabMode;
 use bark::app::{Input, WindowHandle};
 use bark::assets::Assets;
-use bark::bark3d::{self, Camera, DirectionalLight, RenderObject, Transform};
+use bark::bark3d::{self, Camera, DirectionalLight, Material, StaticMesh, Transform};
 use bark::ecs::{Commands, IntoSystem, Query, Res, ResMut};
 use bark::gfx::mesh::MeshManager;
 use bark::gfx::texture::TextureManager;
@@ -31,19 +31,29 @@ fn scene(
     mut meshes: ResMut<MeshManager>,
     mut commands: Commands,
 ) {
-    let pot_transform = Transform::default().scale(Vec3::splat(2.0));
-    commands.spawn().insert(pot_transform).insert(
-        RenderObject::new(meshes.add(assets.load("potted_plant_02_pot.fbx")))
-            .diffuse_texture(textures.add(assets.load("potted_plant_02_pot_diff_4k.png")))
-            .normal_texture(textures.add(assets.load("potted_plant_02_pot_nor_gl_4k.png")))
-            .pbr_texture(textures.add(assets.load("potted_plant_02_pot_arm_4k.png"))),
-    );
-    commands.spawn().insert(pot_transform).insert(
-        RenderObject::new(meshes.add(assets.load("potted_plant_02_leaves.fbx")))
-            .diffuse_texture(textures.add(assets.load("potted_plant_02_leaves_diff_4k.png")))
-            .normal_texture(textures.add(assets.load("potted_plant_02_leaves_nor_gl_4k.png")))
-            .pbr_texture(textures.add(assets.load("potted_plant_02_leaves_arm_4k.png"))),
-    );
+    let pot_transform = Transform::default()
+        .position(Vec3::new(-2.0, 0.0, 0.0))
+        .scale(Vec3::splat(2.0));
+    commands
+        .spawn()
+        .insert(pot_transform)
+        .insert(StaticMesh(meshes.add("potted_plant_02_pot.fbx", 0)))
+        .insert(
+            Material::default()
+                .diffuse_texture(textures.add(assets.load("potted_plant_02_pot_diff_4k.png")))
+                .normal_texture(textures.add(assets.load("potted_plant_02_pot_nor_gl_4k.png")))
+                .pbr_texture(textures.add(assets.load("potted_plant_02_pot_arm_4k.png"))),
+        );
+    commands
+        .spawn()
+        .insert(pot_transform)
+        .insert(StaticMesh(meshes.add("potted_plant_02_leaves.fbx", 0)))
+        .insert(
+            Material::default()
+                .diffuse_texture(textures.add(assets.load("potted_plant_02_leaves_diff_4k.png")))
+                .normal_texture(textures.add(assets.load("potted_plant_02_leaves_nor_gl_4k.png")))
+                .pbr_texture(textures.add(assets.load("potted_plant_02_leaves_arm_4k.png"))),
+        );
 
     commands
         .spawn()
@@ -52,15 +62,14 @@ fn scene(
                 .position(Vec3::new(2.0, 0.0, 0.0))
                 .scale(Vec3::splat(0.2)),
         )
-        .insert(
-            RenderObject::new(meshes.add(assets.load("garfield.obj")))
-                .diffuse_texture(textures.add(assets.load("garfield.png"))),
-        )
+        .insert(StaticMesh(meshes.add("garfield.obj", 0)))
+        .insert(Material::default().diffuse_texture(textures.add(assets.load("garfield.png"))))
         .insert(Spin);
     commands
         .spawn()
         .insert(Transform::default().scale(Vec3::splat(25.0)))
-        .insert(RenderObject::new(meshes.add(assets.load("plane.obj"))));
+        .insert(StaticMesh(meshes.add("plane.obj", 0)))
+        .insert(Material::default());
     commands
         .spawn()
         .insert(Transform::default().position(Vec3::new(0.0, 2.5, 5.0)))
@@ -77,7 +86,7 @@ fn scene2(
     mut textures: ResMut<TextureManager>,
     mut commands: Commands,
 ) {
-    let mesh = meshes.add(assets.load("sphere.obj"));
+    let mesh = meshes.add("sphere.obj", 0);
     // let mesh = meshes.add(assets.load("garfield.obj"));
     let tex = textures.add(assets.load("garfield.png"));
 
@@ -99,8 +108,9 @@ fn scene2(
                         .position(Vec3::new(x as f32 * spacing, y as f32 * spacing, 0.0))
                         .scale(Vec3::splat(scale)),
                 )
+                .insert(StaticMesh(mesh))
                 .insert(
-                    RenderObject::new(mesh)
+                    Material::default()
                         .diffuse_color(Vec3::X)
                         // .diffuse_texture(tex)
                         .pbr_values(roughness, metallic),

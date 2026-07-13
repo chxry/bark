@@ -76,7 +76,7 @@ impl AssetProcessor for TextureProcessor {
             compression: opts.compression,
             data,
         };
-        texture.write(out);
+        bincode::serialize_into(out, &texture).unwrap();
     }
 }
 

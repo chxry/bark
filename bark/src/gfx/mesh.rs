@@ -1,9 +1,10 @@
+use super::model::Model;
 use super::{DEFAULT_BUFFER_SIZE, RenderContext, RenderFrame, extend_buffer};
-use crate::assets::{Asset, Handle};
+use crate::assets::{Assets, Handle};
 use crate::ecs::{Res, ResMut};
 use crate::math::{Vec2, Vec3, Vec4};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{Read, Write};
 use std::mem;
 use std::ops::Range;
 use tracing::debug;
@@ -17,7 +18,7 @@ pub struct MeshManager {
     pub index_buffer: wgpu::Buffer,
     index_end: wgpu::BufferAddress,
     allocations: Vec<MeshSlot>,
-    asset_map: HashMap<String, MeshHandle>,
+    asset_map: HashMap<(String, usize), MeshHandle>,
 }
 
 impl MeshManager {
@@ -48,36 +49,46 @@ impl MeshManager {
         }
     }
 
-    pub fn add(&mut self, handle: Handle<Mesh>) -> MeshHandle {
+    pub fn add(&mut self, id: &str, index: usize) -> MeshHandle {
         *self
             .asset_map
-            .entry(handle.id().to_owned())
+            .entry((id.to_owned(), index))
             .or_insert_with(|| {
-                self.allocations.push(MeshSlot::Pending(handle));
+                self.allocations
+                    .push(MeshSlot::Pending(id.to_owned(), index));
                 MeshHandle((self.allocations.len() - 1) as _)
             })
     }
 
     pub fn get(&self, handle: &MeshHandle) -> Option<&MeshAllocation> {
-        self.allocations[handle.0 as usize].get_allocation()
+        match &self.allocations[handle.0 as usize] {
+            MeshSlot::Uploaded(h) => Some(h),
+            _ => None,
+        }
     }
 
     fn upload_pending(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        assets: &mut Assets,
     ) -> Option<wgpu::CommandBuffer> {
         let mut to_upload = vec![];
         let mut upload_vertex_size = 0;
         let mut upload_index_size = 0;
         for (i, slot) in self.allocations.iter_mut().enumerate() {
-            if let MeshSlot::Pending(handle) = slot
-                && let Some(mesh) = handle.try_get()
-            {
-                debug!("upload mesh {:?}", handle.id());
-                to_upload.push(i);
-                upload_vertex_size += mesh.vertex_data.len();
-                upload_index_size += mesh.index_data.len();
+            match slot {
+                MeshSlot::Pending(id, index) => {
+                    *slot = MeshSlot::PendingAsset(assets.load(id), *index)
+                }
+                MeshSlot::PendingAsset(handle, index) if let Some(model) = handle.try_get() => {
+                    debug!("upload mesh {:?}/{}", handle.id(), index);
+                    to_upload.push(i);
+                    let mesh = &model.meshes[*index];
+                    upload_vertex_size += mesh.vertex_data.len();
+                    upload_index_size += mesh.index_data.len();
+                }
+                _ => {}
             }
         }
 
@@ -107,7 +118,11 @@ impl MeshManager {
             );
 
             for i in to_upload {
-                let mesh = self.allocations[i].get_pending().unwrap().get();
+                let MeshSlot::PendingAsset(handle, index) = &self.allocations[i] else {
+                    panic!();
+                };
+                let mesh = &handle.get().meshes[*index];
+
                 let allocation = MeshAllocation {
                     vertex_start: self.vertex_end,
                     vertex_len: mesh.vertex_data.len() as _,
@@ -136,26 +151,10 @@ impl MeshManager {
     }
 }
 
-// todo: this has the evil side effect of forcing cpu assets to be reloaded even if they are already uploaded, not terrible since it can be the users responsibility to manage a Handle if they want to upload multiple times.
 enum MeshSlot {
-    Pending(Handle<Mesh>),
+    Pending(String, usize),
+    PendingAsset(Handle<Model>, usize),
     Uploaded(MeshAllocation),
-}
-
-impl MeshSlot {
-    fn get_pending(&self) -> Option<&Handle<Mesh>> {
-        match self {
-            Self::Pending(h) => Some(h),
-            _ => None,
-        }
-    }
-
-    fn get_allocation(&self) -> Option<&MeshAllocation> {
-        match self {
-            Self::Uploaded(a) => Some(a),
-            _ => None,
-        }
-    }
 }
 
 pub struct MeshAllocation {
@@ -183,54 +182,19 @@ pub fn upload_meshes(
     ctx: Res<RenderContext>,
     frame: Res<RenderFrame>,
     mut meshes: ResMut<MeshManager>,
+    mut assets: ResMut<Assets>,
 ) {
-    if let Some(buffer) = meshes.upload_pending(&ctx.device, &ctx.queue) {
+    if let Some(buffer) = meshes.upload_pending(&ctx.device, &ctx.queue, &mut assets) {
         frame.submit(buffer);
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Mesh {
+    #[serde(with = "serde_bytes")]
     pub vertex_data: Vec<u8>,
+    #[serde(with = "serde_bytes")]
     pub index_data: Vec<u8>,
-}
-
-impl Mesh {
-    pub fn vertex_count(&self) -> u32 {
-        (self.vertex_data.len() / mem::size_of::<Vertex>()) as _
-    }
-
-    pub fn index_count(&self) -> u32 {
-        (self.index_data.len() / mem::size_of::<Index>()) as _
-    }
-
-    pub fn write<W: Write>(&self, mut writer: W) {
-        writer
-            .write_all(&self.vertex_count().to_le_bytes())
-            .unwrap();
-        writer.write_all(&self.index_count().to_le_bytes()).unwrap();
-        writer.write_all(&self.vertex_data).unwrap();
-        writer.write_all(&self.index_data).unwrap();
-    }
-}
-
-impl Asset for Mesh {
-    fn read<R: Read>(mut reader: R) -> Self {
-        let mut header = [0; 8];
-        reader.read_exact(&mut header).unwrap();
-
-        let vertex_count = u32::from_le_bytes(header[0..4].try_into().unwrap());
-        let index_count = u32::from_le_bytes(header[4..8].try_into().unwrap());
-
-        let mut vertex_data = vec![0; vertex_count as usize * mem::size_of::<Vertex>()];
-        let mut index_data = vec![0; index_count as usize * mem::size_of::<Index>()];
-        reader.read_exact(&mut vertex_data).unwrap();
-        reader.read_exact(&mut index_data).unwrap();
-
-        Self {
-            vertex_data,
-            index_data,
-        }
-    }
 }
 
 pub type Index = u32;
