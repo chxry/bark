@@ -1,5 +1,4 @@
 pub mod mesh;
-pub mod model;
 pub mod texture;
 
 use self::mesh::MeshManager;

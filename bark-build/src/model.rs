@@ -1,7 +1,7 @@
 use crate::AssetProcessor;
+use bark::bark3d::model::Model;
 use bark::cast_bytes_vec;
 use bark::gfx::mesh::{Mesh, Vertex};
-use bark::gfx::model::Model;
 use bark::math::{Vec2, Vec3};
 use russimp_ng::scene::{PostProcess, Scene};
 use std::fs::File;
@@ -25,7 +25,10 @@ impl AssetProcessor for ModelProcessor {
         )
         .unwrap();
 
-        let mut model = Model { meshes: vec![] };
+        let mut model = Model {
+            nodes: vec![],
+            meshes: vec![],
+        };
         for mesh in scene.meshes {
             let mut vertices = Vec::with_capacity(mesh.vertices.len());
             let mut indices = Vec::with_capacity(mesh.faces.len() * 3);

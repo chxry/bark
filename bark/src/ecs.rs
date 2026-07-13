@@ -490,6 +490,13 @@ macro_rules! impl_system {
 
 variadics_please::all_tuples_enumerated!(impl_system, 0, 16, P);
 
+fn conflicting_access_panic(ty: &str, type_id: TypeKey, sys_id: TypeKey) -> ! {
+    panic!(
+        "conflicting {} access for {:?} in system {:?}",
+        ty, type_id, sys_id
+    )
+}
+
 pub struct Res<'w, T>(&'w T);
 
 impl<T: Any + Send + Sync> SystemParam for Res<'_, T> {
@@ -498,10 +505,7 @@ impl<T: Any + Send + Sync> SystemParam for Res<'_, T> {
     fn init(meta: &mut SystemMeta) {
         let id = TypeKey::of::<T>();
         if let Some(Access::Write) = meta.resource_access.get(&id) {
-            panic!(
-                "conflicting resource access for {:?} in system {:?}",
-                id, meta.type_id.name
-            );
+            conflicting_access_panic("resource", id, meta.type_id)
         }
         meta.resource_access.insert(id, Access::Read);
     }
@@ -537,10 +541,7 @@ impl<T: Any + Send + Sync> SystemParam for ResMut<'_, T> {
     fn init(meta: &mut SystemMeta) {
         let id = TypeKey::of::<T>();
         if meta.resource_access.contains_key(&id) {
-            panic!(
-                "conflicting resource access for {:?} in system {:?}",
-                id, meta.type_id.name
-            );
+            conflicting_access_panic("resource", id, meta.type_id)
         }
         meta.resource_access.insert(id, Access::Write);
     }
@@ -630,8 +631,9 @@ macro_rules! impl_query {
         }
 
         impl<$($P: QueryData),*> Query<($($P,)*)> {
-            pub fn iter(&mut self) -> QueryIter<($(Peekable<impl Iterator<Item = (EntityId, $P)>>,)*), ($($P,)*)> {
-                // safety: &mut gives `QueryIter` exclusive access over what we requested in `declare_access`
+            /// safety: CAN CREATE MULTIPLE &mut IF CALLED TWICE
+            pub fn iter(&self) -> QueryIter<($(Peekable<impl Iterator<Item = (EntityId, $P)>>,)*), ($($P,)*)> {
+                // safety: we requested in `declare_access`, but only use &self. footgun
                 unsafe {
                     QueryIter {
                         iters: ($($P::get_iter(self.world).peekable(),)*),
@@ -640,8 +642,9 @@ macro_rules! impl_query {
                 }
             }
 
-            pub fn get(&mut self, entity: EntityId) -> Option<($($P,)*)> {
-                // safety: &mut gives `QueryIter` exclusive access over what we requested in `declare_access`
+            /// safety: CAN CREATE MULTIPLE &mut IF CALLED TWICE
+            pub fn get(&self, entity: EntityId) -> Option<($($P,)*)> {
+                // safety: we requested in `declare_access`, but only use &self. footgun
                 Some(($(unsafe {$P::get_entity(self.world, entity) }?,)*))
             }
         }
@@ -684,10 +687,7 @@ impl<T: Any + Send + Sync> QueryData for &T {
     fn declare_access(meta: &mut SystemMeta) {
         let id = TypeKey::of::<T>();
         if let Some(Access::Write) = meta.component_access.get(&id) {
-            panic!(
-                "conflicting component access for {:?} in system {:?}",
-                id, meta.type_id.name
-            );
+            conflicting_access_panic("component", id, meta.type_id);
         }
         meta.component_access.insert(id, Access::Read);
     }
@@ -709,10 +709,7 @@ impl<T: Any + Send + Sync> QueryData for &mut T {
     fn declare_access(meta: &mut SystemMeta) {
         let id = TypeKey::of::<T>();
         if meta.component_access.contains_key(&id) {
-            panic!(
-                "conflicting component access for {:?} in system {:?}",
-                id, meta.type_id.name
-            );
+            conflicting_access_panic("component", id, meta.type_id);
         }
         meta.component_access.insert(id, Access::Write);
     }
@@ -787,6 +784,10 @@ impl EntityCommands<'_> {
 
     pub fn despawn(self) {
         self.0.push(Box::new(DespawnCommand(self.1)));
+    }
+
+    pub fn id(&self) -> EntityId {
+        self.1
     }
 }
 

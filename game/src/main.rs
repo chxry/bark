@@ -1,8 +1,7 @@
 use bark::app::winit::keyboard::KeyCode;
 use bark::app::winit::window::CursorGrabMode;
 use bark::app::{Input, WindowHandle};
-use bark::assets::Assets;
-use bark::bark3d::{self, Camera, DirectionalLight, Material, StaticMesh, Transform};
+use bark::bark3d::{self, Camera, DirectionalLight, Material, Parent, StaticMesh, Transform};
 use bark::ecs::{Commands, IntoSystem, Query, Res, ResMut};
 use bark::gfx::mesh::MeshManager;
 use bark::gfx::texture::TextureManager;
@@ -26,33 +25,40 @@ fn main() {
 struct Spin;
 
 fn scene(
-    mut assets: ResMut<Assets>,
     mut textures: ResMut<TextureManager>,
     mut meshes: ResMut<MeshManager>,
     mut commands: Commands,
 ) {
-    let pot_transform = Transform::default()
-        .position(Vec3::new(-2.0, 0.0, 0.0))
-        .scale(Vec3::splat(2.0));
+    let pot = commands
+        .spawn()
+        .insert(
+            Transform::default()
+                .position(Vec3::new(-2.0, 0.0, 0.0))
+                .scale(Vec3::splat(2.0)),
+        )
+        .insert(Spin)
+        .id();
     commands
         .spawn()
-        .insert(pot_transform)
+        .insert(Transform::default())
+        .insert(Parent(pot))
         .insert(StaticMesh(meshes.add("potted_plant_02_pot.fbx", 0)))
         .insert(
             Material::default()
-                .diffuse_texture(textures.add(assets.load("potted_plant_02_pot_diff_4k.png")))
-                .normal_texture(textures.add(assets.load("potted_plant_02_pot_nor_gl_4k.png")))
-                .pbr_texture(textures.add(assets.load("potted_plant_02_pot_arm_4k.png"))),
+                .diffuse_texture(textures.add("potted_plant_02_pot_diff_4k.png"))
+                .normal_texture(textures.add("potted_plant_02_pot_nor_gl_4k.png"))
+                .pbr_texture(textures.add("potted_plant_02_pot_arm_4k.png")),
         );
     commands
         .spawn()
-        .insert(pot_transform)
+        .insert(Transform::default())
+        .insert(Parent(pot))
         .insert(StaticMesh(meshes.add("potted_plant_02_leaves.fbx", 0)))
         .insert(
             Material::default()
-                .diffuse_texture(textures.add(assets.load("potted_plant_02_leaves_diff_4k.png")))
-                .normal_texture(textures.add(assets.load("potted_plant_02_leaves_nor_gl_4k.png")))
-                .pbr_texture(textures.add(assets.load("potted_plant_02_leaves_arm_4k.png"))),
+                .diffuse_texture(textures.add("potted_plant_02_leaves_diff_4k.png"))
+                .normal_texture(textures.add("potted_plant_02_leaves_nor_gl_4k.png"))
+                .pbr_texture(textures.add("potted_plant_02_leaves_arm_4k.png")),
         );
 
     commands
@@ -63,8 +69,7 @@ fn scene(
                 .scale(Vec3::splat(0.2)),
         )
         .insert(StaticMesh(meshes.add("garfield.obj", 0)))
-        .insert(Material::default().diffuse_texture(textures.add(assets.load("garfield.png"))))
-        .insert(Spin);
+        .insert(Material::default().diffuse_texture(textures.add("garfield.png")));
     commands
         .spawn()
         .insert(Transform::default().scale(Vec3::splat(25.0)))
@@ -81,14 +86,13 @@ fn scene(
 }
 
 fn scene2(
-    mut assets: ResMut<Assets>,
     mut meshes: ResMut<MeshManager>,
     mut textures: ResMut<TextureManager>,
     mut commands: Commands,
 ) {
     let mesh = meshes.add("sphere.obj", 0);
-    // let mesh = meshes.add(assets.load("garfield.obj"));
-    let tex = textures.add(assets.load("garfield.png"));
+    // let mesh = meshes.add("garfield.obj", 0);
+    let tex = textures.add("garfield.png");
 
     let rows = 10;
     let cols = 10;
@@ -143,7 +147,7 @@ fn scene2(
         .insert(Spin);
 }
 
-fn spinny(mut transforms: Query<(&mut Transform, &Spin)>) {
+fn spinny(transforms: Query<(&mut Transform, &Spin)>) {
     for (_, (t, _)) in transforms.iter() {
         t.rotation = Quat::from_rotation_y(0.01) * t.rotation;
     }
@@ -155,7 +159,7 @@ struct CameraController {
 }
 
 fn update_camera(
-    mut camera: Query<(&mut Transform, &mut CameraController)>,
+    camera: Query<(&mut Transform, &mut CameraController)>,
     input: Res<Input>,
     window: Res<WindowHandle>,
 ) {

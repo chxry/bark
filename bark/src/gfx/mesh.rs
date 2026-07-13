@@ -1,6 +1,6 @@
-use super::model::Model;
 use super::{DEFAULT_BUFFER_SIZE, RenderContext, RenderFrame, extend_buffer};
 use crate::assets::{Assets, Handle};
+use crate::bark3d::model::Model; // TEMP
 use crate::ecs::{Res, ResMut};
 use crate::math::{Vec2, Vec3, Vec4};
 use serde::{Deserialize, Serialize};

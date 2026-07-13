@@ -1,7 +1,8 @@
+pub mod model;
 mod render;
 
 use crate::app::{self, App};
-use crate::ecs::IntoSystem;
+use crate::ecs::{Commands, EntityId, IntoSystem, Query};
 use crate::gfx;
 use crate::gfx::mesh::MeshHandle;
 use crate::gfx::texture::TextureHandle;
@@ -16,8 +17,11 @@ pub const RIGHT: Vec3 = Vec3::X;
 pub fn init(app: &mut App) {
     app.world
         .insert_system::<app::Startup>(render::init_pipeline.after(gfx::init_renderer));
-    app.world
-        .insert_system::<app::Render>(render::shadow_pass.with(gfx::during_frame));
+    app.world.insert_system::<app::Render>(
+        render::shadow_pass
+            .with(gfx::during_frame)
+            .after(propagate_transforms),
+    );
     app.world
         .insert_system::<app::Render>(render::sky_pass.with(gfx::during_frame));
 
@@ -25,12 +29,21 @@ pub fn init(app: &mut App) {
         render::main_pass
             .with(gfx::during_frame)
             .after(render::shadow_pass)
-            .after(render::sky_pass),
+            .after(render::sky_pass)
+            .after(propagate_transforms),
+    );
+    app.world.insert_system::<app::Render>(
+        render::extract_lights
+            .with(gfx::during_frame)
+            .after(propagate_transforms),
+    );
+    app.world.insert_system::<app::Render>(
+        render::extract_frame_globals
+            .with(gfx::during_frame)
+            .after(propagate_transforms),
     );
     app.world
-        .insert_system::<app::Render>(render::extract_lights.with(gfx::during_frame));
-    app.world
-        .insert_system::<app::Render>(render::extract_frame_globals.with(gfx::during_frame));
+        .insert_system::<app::Render>(propagate_transforms.into_system());
     app.world
         .insert_system::<app::ResizeEvent>(render::resize_framebuffer.into_system());
 
@@ -79,6 +92,55 @@ impl Default for Transform {
             rotation: Quat::IDENTITY,
             scale: Vec3::ONE,
         }
+    }
+}
+
+pub struct GlobalTransform(Mat4);
+
+impl GlobalTransform {
+    pub fn position(&self) -> Vec3 {
+        self.0.to_scale_rotation_translation().2
+    }
+
+    pub fn rotation(&self) -> Quat {
+        self.0.to_scale_rotation_translation().1
+    }
+
+    pub fn scale(&self) -> Vec3 {
+        self.0.to_scale_rotation_translation().0
+    }
+}
+
+pub struct Parent(pub EntityId);
+
+pub fn propagate_transforms(
+    transforms: Query<(&Transform,)>,
+    parented: Query<(&Transform, &Parent)>,
+    mut commands: Commands,
+) {
+    // todo: optimize
+    for (entity_id, (transform,)) in transforms.iter() {
+        let mut transform = transform.as_mat4();
+        if let Some((_, parent)) = parented.get(entity_id) {
+            let mut parent_id = parent.0;
+            loop {
+                match parented.get(parent_id) {
+                    Some((parent_transform, new_parent)) => {
+                        parent_id = new_parent.0;
+                        transform = parent_transform.as_mat4() * transform;
+                    }
+                    None if let Some((parent_transform,)) = transforms.get(parent_id) => {
+                        transform = parent_transform.as_mat4() * transform;
+                        break;
+                    }
+
+                    _ => break,
+                }
+            }
+        }
+        commands
+            .entity(entity_id)
+            .insert(GlobalTransform(transform));
     }
 }
 

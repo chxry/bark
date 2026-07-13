@@ -1,6 +1,7 @@
-use super::{Camera, DirectionalLight, FORWARD, Material, SkySettings, StaticMesh, Transform, UP};
+use super::{Camera, DirectionalLight, FORWARD, Material, SkySettings, StaticMesh, UP};
 use crate::app::ResizeEvent;
 use crate::assets::Assets;
+use crate::bark3d::GlobalTransform;
 use crate::ecs::{Commands, Observer, Query, Res, ResMut};
 use crate::gfx::mesh::{INDEX_FORMAT, MeshManager, Vertex};
 use crate::gfx::texture::TextureManager;
@@ -313,7 +314,7 @@ pub fn main_pass(
     framebuffer: Res<Framebuffer>,
     textures: Res<TextureManager>,
     meshes: Res<MeshManager>,
-    mut static_meshes: Query<(&Transform, &StaticMesh, &Material)>,
+    static_meshes: Query<(&GlobalTransform, &StaticMesh, &Material)>,
 ) {
     let Some((_, surface_view)) = frame.surface.as_ref() else {
         return;
@@ -353,10 +354,9 @@ pub fn main_pass(
     main_pass.set_index_buffer(meshes.index_buffer.slice(..), INDEX_FORMAT);
     for (_, (transform, mesh, material)) in static_meshes.iter() {
         if let Some(mesh) = meshes.get(&mesh.0) {
-            let transform_mat = transform.as_mat4();
             let gpu_object = GPUObject {
-                transform: transform_mat,
-                normal_transform: Mat3A::from_mat4(transform_mat).inverse().transpose(),
+                transform: transform.0,
+                normal_transform: Mat3A::from_mat4(transform.0).inverse().transpose(),
                 diffuse_color: material.diffuse_color,
                 diffuse_id: material.diffuse_tex.map_or(0, |t| textures.get(t)),
                 pbr_values: material.pbr.get_arm_values(),
@@ -377,7 +377,7 @@ pub fn shadow_pass(
     frame: Res<RenderFrame>,
     pipeline: Res<RenderPipeline>,
     meshes: Res<MeshManager>,
-    mut static_meshes: Query<(&Transform, &StaticMesh, &Material)>,
+    static_meshes: Query<(&GlobalTransform, &StaticMesh, &Material)>,
 ) {
     if frame.surface.is_none() {
         return;
@@ -407,8 +407,7 @@ pub fn shadow_pass(
     shadow_pass.set_index_buffer(meshes.index_buffer.slice(..), INDEX_FORMAT);
     for (_, (transform, mesh, _)) in static_meshes.iter() {
         if let Some(mesh) = meshes.get(&mesh.0) {
-            let transform_mat = transform.as_mat4();
-            shadow_pass.set_immediates(0, unsafe { cast_bytes(&transform_mat) });
+            shadow_pass.set_immediates(0, unsafe { cast_bytes(&transform.0) });
             shadow_pass.draw_indexed(mesh.index_range(), mesh.vertex_range().start as _, 0..1);
         }
     }
@@ -459,12 +458,12 @@ pub fn extract_lights(
     frame: Res<RenderFrame>,
     mut pipeline: ResMut<RenderPipeline>,
     sky: Res<SkySettings>,
-    mut lights: Query<(&Transform, &DirectionalLight)>,
+    lights: Query<(&GlobalTransform, &DirectionalLight)>,
 ) {
     let lights = lights
         .iter()
         .map(|(_, (t, l))| GPULight {
-            direction: t.rotation * FORWARD,
+            direction: t.rotation() * FORWARD,
             tag: 1,
             color: l.color,
         })
@@ -507,7 +506,7 @@ pub fn extract_frame_globals(
     frame: Res<RenderFrame>,
     pipeline: ResMut<RenderPipeline>,
     sky: Res<SkySettings>,
-    mut cameras: Query<(&Transform, &Camera)>,
+    cameras: Query<(&GlobalTransform, &Camera)>,
 ) {
     let Some((surface, _)) = frame.surface.as_ref() else {
         return;
@@ -518,8 +517,8 @@ pub fn extract_frame_globals(
 
     let aspect_ratio = surface.texture.width() as f32 / surface.texture.height() as f32;
     let camera_view = glam::camera::rh::view::look_to_mat4(
-        camera_transform.position,
-        camera_transform.rotation * FORWARD,
+        camera_transform.position(),
+        camera_transform.rotation() * FORWARD,
         UP,
     );
     let camera_proj = glam::camera::rh::proj::directx::perspective(
@@ -547,7 +546,7 @@ pub fn extract_frame_globals(
         camera_proj,
         camera_view_proj_inv: (camera_proj * camera_view).inverse(),
         shadow_source_mats,
-        camera_pos: camera_transform.position,
+        camera_pos: camera_transform.position(),
     };
     ctx.queue.write_buffer(&pipeline.uniform_buffer, 0, unsafe {
         cast_bytes(&frame_globals)
