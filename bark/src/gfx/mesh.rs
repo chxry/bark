@@ -1,10 +1,10 @@
 use super::{DEFAULT_BUFFER_SIZE, RenderContext, RenderFrame, extend_buffer};
-use crate::assets::{Assets, Handle};
-use crate::bark3d::model::Model; // TEMP
+use crate::assets::{Asset, Assets, Handle};
 use crate::ecs::{Res, ResMut};
 use crate::math::{Vec2, Vec3, Vec4};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Read;
 use std::mem;
 use std::ops::Range;
 use tracing::debug;
@@ -18,7 +18,7 @@ pub struct MeshManager {
     pub index_buffer: wgpu::Buffer,
     index_end: wgpu::BufferAddress,
     allocations: Vec<MeshSlot>,
-    asset_map: HashMap<(String, usize), MeshHandle>,
+    asset_map: HashMap<String, MeshHandle>,
 }
 
 impl MeshManager {
@@ -49,15 +49,11 @@ impl MeshManager {
         }
     }
 
-    pub fn add(&mut self, id: &str, index: usize) -> MeshHandle {
-        *self
-            .asset_map
-            .entry((id.to_owned(), index))
-            .or_insert_with(|| {
-                self.allocations
-                    .push(MeshSlot::Pending(id.to_owned(), index));
-                MeshHandle((self.allocations.len() - 1) as _)
-            })
+    pub fn add(&mut self, id: &str) -> MeshHandle {
+        *self.asset_map.entry(id.to_owned()).or_insert_with(|| {
+            self.allocations.push(MeshSlot::Pending(id.to_owned()));
+            MeshHandle((self.allocations.len() - 1) as _)
+        })
     }
 
     pub fn get(&self, handle: &MeshHandle) -> Option<&MeshAllocation> {
@@ -78,13 +74,10 @@ impl MeshManager {
         let mut upload_index_size = 0;
         for (i, slot) in self.allocations.iter_mut().enumerate() {
             match slot {
-                MeshSlot::Pending(id, index) => {
-                    *slot = MeshSlot::PendingAsset(assets.load(id), *index)
-                }
-                MeshSlot::PendingAsset(handle, index) if let Some(model) = handle.try_get() => {
-                    debug!("upload mesh {:?}/{}", handle.id(), index);
+                MeshSlot::Pending(id) => *slot = MeshSlot::PendingAsset(assets.load(id)),
+                MeshSlot::PendingAsset(handle) if let Some(mesh) = handle.try_get() => {
+                    debug!("upload mesh {:?}", handle.id());
                     to_upload.push(i);
-                    let mesh = &model.meshes[*index];
                     upload_vertex_size += mesh.vertex_data.len();
                     upload_index_size += mesh.index_data.len();
                 }
@@ -118,10 +111,10 @@ impl MeshManager {
             );
 
             for i in to_upload {
-                let MeshSlot::PendingAsset(handle, index) = &self.allocations[i] else {
+                let MeshSlot::PendingAsset(handle) = &self.allocations[i] else {
                     panic!();
                 };
-                let mesh = &handle.get().meshes[*index];
+                let mesh = &handle.get();
 
                 let allocation = MeshAllocation {
                     vertex_start: self.vertex_end,
@@ -152,8 +145,8 @@ impl MeshManager {
 }
 
 enum MeshSlot {
-    Pending(String, usize),
-    PendingAsset(Handle<Model>, usize),
+    Pending(String),
+    PendingAsset(Handle<Mesh>),
     Uploaded(MeshAllocation),
 }
 
@@ -195,6 +188,12 @@ pub struct Mesh {
     pub vertex_data: Vec<u8>,
     #[serde(with = "serde_bytes")]
     pub index_data: Vec<u8>,
+}
+
+impl Asset for Mesh {
+    fn read<R: Read>(reader: R) -> Self {
+        bincode::deserialize_from(reader).unwrap()
+    }
 }
 
 pub type Index = u32;

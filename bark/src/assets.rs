@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, Weak};
-use tracing::{debug, trace_span};
+use tracing::{debug, trace, trace_span};
 
 pub const MANIFEST_FILE: &str = "manifest.json";
 pub const CACHE_DIR: &str = ".bark-cache";
@@ -51,9 +51,18 @@ impl Assets {
         match self.storage.get(id).and_then(|h| h.upgrade()) {
             Some(h) => Handle(h.downcast().unwrap()),
             None => {
-                debug!("load asset {:?}", id);
-                let entry = self.manifest.0.get(id).unwrap();
-                let path = self.cache_dir.join(hex::encode(entry.hash.to_be_bytes()));
+                let (base, fragment) = match id.split_once("#") {
+                    Some((b, f)) => (b, Some(f)),
+                    None => (id, None),
+                };
+                let entry = self.manifest.0.get(base).unwrap();
+
+                let base_filename = hex::encode(entry.hash.to_be_bytes());
+                let path = self.cache_dir.join(match fragment {
+                    Some(f) => format!("{}#{}", base_filename, f),
+                    None => base_filename,
+                });
+
                 let handle = Handle(Arc::new((id.to_owned(), OnceLock::new())));
 
                 if blocking {
@@ -109,6 +118,7 @@ impl<T: Asset> Handle<T> {
 
     fn load(&self, path: &Path) {
         let _span = trace_span!("load asset", id = self.id(), type = any::type_name::<T>());
+        trace!("load asset from {:?}", path);
         let _ = self.0.1.set(T::read(File::open(path).unwrap()));
     }
 }

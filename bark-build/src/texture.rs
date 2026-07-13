@@ -4,7 +4,7 @@ use image::imageops::{self, FilterType};
 use intel_tex_2::{RSurface, RgSurface, RgbaSurface, bc4, bc5, bc7};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::path::Path;
+use std::path::PathBuf;
 
 pub struct TextureProcessor;
 
@@ -19,7 +19,7 @@ impl AssetProcessor for TextureProcessor {
     type Options = TextureOptions;
 
     // todo: respect TextureMode, only downsample needed channels
-    fn process(&self, src_data: &[u8], _: &Path, out: File, opts: Self::Options) {
+    fn process(&self, src_data: &[u8], _: PathBuf, out_path: PathBuf, opts: Self::Options) {
         let image = image::load_from_memory(src_data).unwrap().to_rgba8();
 
         let mut mip_levels = vec![image];
@@ -76,7 +76,7 @@ impl AssetProcessor for TextureProcessor {
             compression: opts.compression,
             data,
         };
-        bincode::serialize_into(out, &texture).unwrap();
+        bincode::serialize_into(File::create(out_path).unwrap(), &texture).unwrap();
     }
 }
 

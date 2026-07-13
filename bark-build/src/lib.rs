@@ -65,12 +65,7 @@ impl AssetProcessors {
 
                 build_log("Processing", &format!("{} ({})", id, entry.ty));
                 let processor = self.processors.get(&entry.ty).unwrap();
-                processor.process_erased(
-                    &src_data,
-                    &src_path,
-                    File::create(cache_path).unwrap(),
-                    &entry.options,
-                );
+                processor.process_erased(&src_data, src_path, cache_path, &entry.options);
                 Some(hash)
             })
             .collect::<Vec<_>>();
@@ -100,23 +95,29 @@ impl AssetProcessors {
 pub trait AssetProcessor: Send + Sync {
     type Options: Serialize + DeserializeOwned;
 
-    fn process(&self, src_data: &[u8], src_path: &Path, out: File, opts: Self::Options);
+    fn process(&self, src_data: &[u8], src_path: PathBuf, out_path: PathBuf, opts: Self::Options);
 }
 
 trait ErasedAssetProcessor: Send + Sync {
-    fn process_erased(&self, src_data: &[u8], src_path: &Path, out: File, opts: &serde_json::Value);
+    fn process_erased(
+        &self,
+        src_data: &[u8],
+        src_path: PathBuf,
+        out_path: PathBuf,
+        opts: &serde_json::Value,
+    );
 }
 
 impl<T: AssetProcessor> ErasedAssetProcessor for T {
     fn process_erased(
         &self,
         src_data: &[u8],
-        src_path: &Path,
-        out: File,
+        src_path: PathBuf,
+        out_path: PathBuf,
         opts: &serde_json::Value,
     ) {
         let opts = serde_json::from_value(opts.clone()).unwrap();
-        self.process(src_data, src_path, out, opts);
+        self.process(src_data, src_path, out_path, opts);
     }
 }
 
@@ -136,4 +137,13 @@ fn build_log(status: &str, msg: &str) {
 
 fn build_warn(msg: &str) {
     println!("cargo::warning=\r\x1b[K\x1b[1;33mwarning\x1b[97m: {}", msg);
+}
+
+fn create_frag(out_path: &Path, frag: &str) -> File {
+    File::create(out_path.with_file_name(format!(
+        "{}#{}",
+        out_path.file_name().unwrap().display(),
+        frag
+    )))
+    .unwrap()
 }

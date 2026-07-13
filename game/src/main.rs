@@ -42,7 +42,7 @@ fn scene(
         .spawn()
         .insert(Transform::default())
         .insert(Parent(pot))
-        .insert(StaticMesh(meshes.add("potted_plant_02_pot.fbx", 0)))
+        .insert(StaticMesh(meshes.add("potted_plant_02_4k.fbx#pot")))
         .insert(
             Material::default()
                 .diffuse_texture(textures.add("potted_plant_02_pot_diff_4k.png"))
@@ -53,7 +53,18 @@ fn scene(
         .spawn()
         .insert(Transform::default())
         .insert(Parent(pot))
-        .insert(StaticMesh(meshes.add("potted_plant_02_leaves.fbx", 0)))
+        .insert(StaticMesh(meshes.add("potted_plant_02_4k.fbx#dirt")))
+        .insert(
+            Material::default()
+                .diffuse_texture(textures.add("potted_plant_02_pot_diff_4k.png"))
+                .normal_texture(textures.add("potted_plant_02_pot_nor_gl_4k.png"))
+                .pbr_texture(textures.add("potted_plant_02_pot_arm_4k.png")),
+        );
+    commands
+        .spawn()
+        .insert(Transform::default())
+        .insert(Parent(pot))
+        .insert(StaticMesh(meshes.add("potted_plant_02_4k.fbx#leaves")))
         .insert(
             Material::default()
                 .diffuse_texture(textures.add("potted_plant_02_leaves_diff_4k.png"))
@@ -68,12 +79,12 @@ fn scene(
                 .position(Vec3::new(2.0, 0.0, 0.0))
                 .scale(Vec3::splat(0.2)),
         )
-        .insert(StaticMesh(meshes.add("garfield.obj", 0)))
+        .insert(StaticMesh(meshes.add("garfield.obj#defaultobject")))
         .insert(Material::default().diffuse_texture(textures.add("garfield.png")));
     commands
         .spawn()
         .insert(Transform::default().scale(Vec3::splat(25.0)))
-        .insert(StaticMesh(meshes.add("plane.obj", 0)))
+        .insert(StaticMesh(meshes.add("plane.obj#Plane")))
         .insert(Material::default());
     commands
         .spawn()
@@ -90,9 +101,9 @@ fn scene2(
     mut textures: ResMut<TextureManager>,
     mut commands: Commands,
 ) {
-    let mesh = meshes.add("sphere.obj", 0);
-    // let mesh = meshes.add("garfield.obj", 0);
-    let tex = textures.add("garfield.png");
+    let mesh = meshes.add("sphere.obj#Sphere");
+    // let mesh = meshes.add("garfield.obj#defaultobject");
+    // let tex = textures.add("garfield.png");
 
     let rows = 10;
     let cols = 10;

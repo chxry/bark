@@ -1,18 +1,23 @@
-use crate::AssetProcessor;
-use bark::bark3d::model::Model;
+use crate::{AssetProcessor, create_frag};
+// use bark::bark3d::model::Model;
 use bark::cast_bytes_vec;
 use bark::gfx::mesh::{Mesh, Vertex};
 use bark::math::{Vec2, Vec3};
 use russimp_ng::scene::{PostProcess, Scene};
-use std::fs::File;
-use std::path::Path;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 pub struct ModelProcessor;
 
-impl AssetProcessor for ModelProcessor {
-    type Options = ();
+#[derive(Serialize, Deserialize)]
+pub struct ModelOptions {
+    skinned: bool,
+}
 
-    fn process(&self, src_data: &[u8], src_path: &Path, out: File, _: Self::Options) {
+impl AssetProcessor for ModelProcessor {
+    type Options = ModelOptions;
+
+    fn process(&self, src_data: &[u8], src_path: PathBuf, out_path: PathBuf, _: Self::Options) {
         let post_process_flags = vec![
             PostProcess::CalculateTangentSpace,
             PostProcess::Triangulate,
@@ -25,10 +30,6 @@ impl AssetProcessor for ModelProcessor {
         )
         .unwrap();
 
-        let mut model = Model {
-            nodes: vec![],
-            meshes: vec![],
-        };
         for mesh in scene.meshes {
             let mut vertices = Vec::with_capacity(mesh.vertices.len());
             let mut indices = Vec::with_capacity(mesh.faces.len() * 3);
@@ -60,14 +61,13 @@ impl AssetProcessor for ModelProcessor {
             }
 
             // safety: `Vertex` and `Index` are valid for `cast_bytes_vec`
-            model.meshes.push(unsafe {
+            let mesh_asset = unsafe {
                 Mesh {
                     vertex_data: cast_bytes_vec(vertices),
                     index_data: cast_bytes_vec(indices),
                 }
-            });
+            };
+            bincode::serialize_into(create_frag(&out_path, &mesh.name), &mesh_asset).unwrap();
         }
-
-        bincode::serialize_into(out, &model).unwrap();
     }
 }
