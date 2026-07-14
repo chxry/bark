@@ -84,12 +84,9 @@ impl AssetProcessor for ModelProcessor {
             }
             let mesh_asset = if opts.skinned {
                 let mut vertices = vertices
-                    .iter()
+                    .into_iter()
                     .map(|v| SkinnedVertex {
-                        pos: v.pos,
-                        uv: v.uv,
-                        tangent: v.tangent,
-                        normal: v.normal,
+                        base: v,
                         bone_indices: UVec4::ZERO,
                         bone_weights: Vec4::ZERO,
                     })
@@ -139,6 +136,8 @@ impl AssetProcessor for ModelProcessor {
 
             for anim in scene.animations {
                 let mut animation = Animation {
+                    duration_ticks: anim.duration as _,
+                    ticks_per_second: anim.ticks_per_second as _,
                     channels: HashMap::new(),
                 };
 

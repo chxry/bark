@@ -26,6 +26,7 @@ pub type WindowHandle = Arc<Window>;
 
 pub struct App {
     pub world: World,
+    occluded: bool,
     last_frame: Instant,
     accumulator: Duration,
 }
@@ -48,6 +49,7 @@ impl App {
             world: World::new(),
             last_frame: Instant::now(),
             accumulator: Duration::ZERO,
+            occluded: true,
         }
     }
 
@@ -81,7 +83,9 @@ impl ApplicationHandler for App {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     let input = self.world.get_resource_mut::<Input>().unwrap();
                     if event.state.is_pressed() {
-                        input.keys_down.insert(code);
+                        if input.keys_down.insert(code) {
+                            input.keys_pressed.insert(code);
+                        }
                     } else {
                         input.keys_down.remove(&code);
                     }
@@ -95,6 +99,7 @@ impl ApplicationHandler for App {
                     _ => {}
                 }
             }
+            WindowEvent::Occluded(occluded) => self.occluded = occluded,
             WindowEvent::RedrawRequested => {
                 let now = Instant::now();
                 let delta = now - self.last_frame;
@@ -111,10 +116,12 @@ impl ApplicationHandler for App {
                     input.end_frame();
                 }
 
-                self.world.run_schedule(Render);
+                if !self.occluded {
+                    self.world.run_schedule(Render);
 
-                #[cfg(feature = "tracy")]
-                tracy_client::frame_mark();
+                    #[cfg(feature = "tracy")]
+                    tracy_client::frame_mark();
+                }
             }
             _ => {}
         }
@@ -146,6 +153,7 @@ pub struct UpdateTarget(pub f32);
 
 pub struct Input {
     keys_down: HashSet<KeyCode>,
+    keys_pressed: HashSet<KeyCode>,
     mouse_delta: (f32, f32),
     left_mouse: bool,
     right_mouse: bool,
@@ -155,6 +163,7 @@ impl Input {
     fn new() -> Self {
         Self {
             keys_down: HashSet::new(),
+            keys_pressed: HashSet::new(),
             mouse_delta: (0.0, 0.0),
             left_mouse: false,
             right_mouse: false,
@@ -163,10 +172,15 @@ impl Input {
 
     fn end_frame(&mut self) {
         self.mouse_delta = (0.0, 0.0);
+        self.keys_pressed.clear();
     }
 
     pub fn key_down(&self, key: KeyCode) -> bool {
         self.keys_down.contains(&key)
+    }
+
+    pub fn key_pressed(&self, key: KeyCode) -> bool {
+        self.keys_pressed.contains(&key)
     }
 
     pub fn mouse_delta(&self) -> (f32, f32) {

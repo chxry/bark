@@ -180,6 +180,10 @@ pub struct Allocation {
 }
 
 impl Allocation {
+    pub fn start(&self) -> u32 {
+        (self.start / self.stride) as _
+    }
+
     pub fn range(&self) -> Range<u32> {
         (self.start / self.stride) as _..((self.start + self.len) / self.stride) as _
     }
@@ -223,10 +227,7 @@ impl StaticVertex {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct SkinnedVertex {
-    pub pos: Vec3,
-    pub uv: Vec2,
-    pub normal: Vec3,
-    pub tangent: Vec4,
+    pub base: StaticVertex,
     pub bone_indices: UVec4,
     pub bone_weights: Vec4,
 }

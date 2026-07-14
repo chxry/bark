@@ -23,3 +23,10 @@ struct Light {
     tag: u32,
     color: vec3<f32>
 }
+
+fn get_bone_transform(bones: array<mat4x4<f32>, 64>, indices: vec4<u32>, weights: vec4<f32>) -> mat4x4<f32> {
+    return bones[indices.x] * weights.x +
+        bones[indices.y] * weights.y +
+        bones[indices.z] * weights.z +
+        bones[indices.w] * weights.w;
+}

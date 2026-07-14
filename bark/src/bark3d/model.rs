@@ -27,6 +27,8 @@ pub struct Bone {
 
 #[derive(Serialize, Deserialize)]
 pub struct Animation {
+    pub duration_ticks: u32,
+    pub ticks_per_second: f32,
     pub channels: HashMap<u32, AnimChannel>,
 }
 

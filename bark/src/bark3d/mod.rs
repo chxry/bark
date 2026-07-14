@@ -1,8 +1,9 @@
 pub mod model;
 mod render;
 
-use self::render::SkeletonHandle;
 use crate::app::{self, App};
+use crate::assets::Handle;
+use crate::bark3d::model::{Animation, Skeleton};
 use crate::ecs::{Commands, EntityId, IntoSystem, Query};
 use crate::gfx;
 use crate::gfx::mesh::MeshHandle;
@@ -21,7 +22,7 @@ pub fn init(app: &mut App) {
     app.world.insert_system::<app::Render>(
         render::shadow_pass
             .with(gfx::during_frame)
-            // .after(render::process_skeletons)
+            // .after(render::extract_skeletons) todo: very concerning
             .after(propagate_transforms),
     );
     app.world
@@ -31,7 +32,7 @@ pub fn init(app: &mut App) {
             .with(gfx::during_frame)
             .after(render::shadow_pass)
             .after(render::sky_pass)
-            // .after(render::process_skeletons)
+            // .after(render::extract_skeletons)
             .after(propagate_transforms),
     );
     app.world.insert_system::<app::Render>(
@@ -45,7 +46,7 @@ pub fn init(app: &mut App) {
             .after(propagate_transforms),
     );
     app.world
-        .insert_system::<app::Render>(render::process_skeletons.into_system());
+        .insert_system::<app::Render>(render::extract_skeletons.with(gfx::during_frame));
     app.world
         .insert_system::<app::Render>(propagate_transforms.into_system());
     app.world
@@ -173,19 +174,7 @@ impl Camera {
 
 pub struct StaticMesh(pub MeshHandle);
 
-pub struct SkinnedMesh {
-    pub mesh: MeshHandle,
-    pub skeleton: SkeletonHandle,
-}
-
-impl SkinnedMesh {
-    pub fn new(mesh: MeshHandle, skeleton: &str) -> Self {
-        Self {
-            mesh,
-            skeleton: SkeletonHandle::PendingId(skeleton.to_owned()),
-        }
-    }
-}
+pub struct SkinnedMesh(pub MeshHandle);
 
 pub struct Material {
     pub diffuse_color: Vec3,
@@ -282,4 +271,10 @@ impl Default for DirectionalLight {
 
 pub struct SkySettings {
     pub sun_dir: Vec3,
+}
+
+pub struct AnimationState {
+    pub skeleton: Handle<Skeleton>,
+    pub animation: Handle<Animation>,
+    pub progress_secs: f32,
 }

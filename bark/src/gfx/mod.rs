@@ -100,7 +100,6 @@ impl RenderFrame {
 pub fn begin_frame(ctx: Res<RenderContext>, mut frame: ResMut<RenderFrame>) {
     let surface = match ctx.surface.get_current_texture() {
         wgpu::CurrentSurfaceTexture::Success(surface) => surface,
-        wgpu::CurrentSurfaceTexture::Occluded => return,
         e => {
             error!("couldn't get surface texture: {:?}", e);
             return;

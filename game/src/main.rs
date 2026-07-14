@@ -1,8 +1,10 @@
 use bark::app::winit::keyboard::KeyCode;
 use bark::app::winit::window::CursorGrabMode;
 use bark::app::{Input, WindowHandle};
+use bark::assets::Assets;
 use bark::bark3d::{
-    self, Camera, DirectionalLight, Material, Parent, SkinnedMesh, StaticMesh, Transform,
+    self, AnimationState, Camera, DirectionalLight, Material, Parent, SkinnedMesh, StaticMesh,
+    Transform,
 };
 use bark::ecs::{Commands, IntoSystem, Query, Res, ResMut};
 use bark::gfx::mesh::MeshManager;
@@ -21,6 +23,8 @@ fn main() {
     app.world.insert_system::<app::Update>(spinny.into_system());
     app.world
         .insert_system::<app::Update>(update_camera.into_system());
+    app.world
+        .insert_system::<app::Update>(animate.into_system());
     app.run();
 }
 
@@ -29,6 +33,7 @@ struct Spin;
 fn scene(
     mut textures: ResMut<TextureManager>,
     mut meshes: ResMut<MeshManager>,
+    mut assets: ResMut<Assets>,
     mut commands: Commands,
 ) {
     let pot = commands
@@ -86,7 +91,12 @@ fn scene(
     commands
         .spawn()
         .insert(Transform::default().position(Vec3::new(0.0, 0.0, -2.0)))
-        .insert(SkinnedMesh::new(meshes.add("fox.fbx#fox1"), "fox.fbx#skel"))
+        .insert(SkinnedMesh(meshes.add("fox.fbx#fox1")))
+        .insert(AnimationState {
+            skeleton: assets.load("fox.fbx#skel"),
+            animation: assets.load("fox.fbx#root|Run"),
+            progress_secs: 0.0,
+        })
         .insert(Material::default().diffuse_texture(textures.add("fox.png")));
     commands
         .spawn()
@@ -177,20 +187,21 @@ struct CameraController {
 }
 
 fn update_camera(
-    camera: Query<(&mut Transform, &mut CameraController)>,
+    camera: Query<(&mut Transform, &mut Camera, &mut CameraController)>,
     input: Res<Input>,
     window: Res<WindowHandle>,
 ) {
-    let Some((_, (transform, controller))) = camera.iter().next() else {
+    let Some((_, (transform, camera, controller))) = camera.iter().next() else {
         return;
     };
 
     let speed = if input.key_down(KeyCode::ShiftLeft) {
         0.01
     } else {
-        0.1
+        0.04
     };
     let mouse_sens = 0.002;
+    let zoom_sens = 0.05;
 
     if input.key_down(KeyCode::KeyW) {
         transform.position += transform.rotation * bark3d::FORWARD * speed;
@@ -203,6 +214,12 @@ fn update_camera(
     }
     if input.key_down(KeyCode::KeyD) {
         transform.position += transform.rotation * bark3d::RIGHT * speed;
+    }
+    if input.key_pressed(KeyCode::Equal) {
+        camera.fov = (camera.fov - zoom_sens).max(0.1);
+    }
+    if input.key_pressed(KeyCode::Minus) {
+        camera.fov = (camera.fov + zoom_sens).min(FRAC_PI_2);
     }
     window
         .set_cursor_grab(if input.left_mouse_down() {
@@ -218,4 +235,27 @@ fn update_camera(
         controller.pitch = controller.pitch.clamp(-FRAC_PI_2 + 0.01, FRAC_PI_2 - 0.01);
     }
     transform.rotation = Quat::from_euler(EulerRot::YXZ, controller.yaw, controller.pitch, 0.0);
+}
+
+fn animate(
+    input: Res<Input>,
+    mut assets: ResMut<Assets>,
+    animations: Query<(&mut AnimationState,)>,
+) {
+    let Some((_, (anim_state,))) = animations.iter().next() else {
+        return;
+    };
+    if input.key_pressed(KeyCode::Digit1) {
+        anim_state.animation = assets.load("fox.fbx#root|Run");
+    } else if input.key_pressed(KeyCode::Digit2) {
+        anim_state.animation = assets.load("fox.fbx#root|Survey");
+    } else if input.key_pressed(KeyCode::Digit3) {
+        anim_state.animation = assets.load("fox.fbx#root|Walk");
+    }
+
+    if let Some(anim) = anim_state.animation.try_get() {
+        let dt = 1.0 / 60.0;
+        anim_state.progress_secs = (anim_state.progress_secs + dt)
+            .rem_euclid(anim.duration_ticks as f32 / anim.ticks_per_second);
+    }
 }

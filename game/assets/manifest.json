@@ -101,12 +101,12 @@
   },
   "shaders/main.wesl": {
     "ty": "wesl",
-    "hash": "b36d539c09b29274",
+    "hash": "b9cca227921cfb9e",
     "options": null
   },
   "shaders/shadow.wesl": {
     "ty": "wesl",
-    "hash": "f91df871fb7f7960",
+    "hash": "6c383579d4e76781",
     "options": null
   },
   "shaders/sky.wesl": {
