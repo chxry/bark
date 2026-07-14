@@ -1,6 +1,7 @@
 pub mod model;
 mod render;
 
+use self::render::SkeletonHandle;
 use crate::app::{self, App};
 use crate::ecs::{Commands, EntityId, IntoSystem, Query};
 use crate::gfx;
@@ -20,16 +21,17 @@ pub fn init(app: &mut App) {
     app.world.insert_system::<app::Render>(
         render::shadow_pass
             .with(gfx::during_frame)
+            // .after(render::process_skeletons)
             .after(propagate_transforms),
     );
     app.world
         .insert_system::<app::Render>(render::sky_pass.with(gfx::during_frame));
-
     app.world.insert_system::<app::Render>(
         render::main_pass
             .with(gfx::during_frame)
             .after(render::shadow_pass)
             .after(render::sky_pass)
+            // .after(render::process_skeletons)
             .after(propagate_transforms),
     );
     app.world.insert_system::<app::Render>(
@@ -42,6 +44,8 @@ pub fn init(app: &mut App) {
             .with(gfx::during_frame)
             .after(propagate_transforms),
     );
+    app.world
+        .insert_system::<app::Render>(render::process_skeletons.into_system());
     app.world
         .insert_system::<app::Render>(propagate_transforms.into_system());
     app.world
@@ -82,6 +86,15 @@ impl Transform {
 
     pub fn as_mat4(&self) -> Mat4 {
         Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.position)
+    }
+
+    pub fn from_mat4(mat: Mat4) -> Self {
+        let (scale, rotation, position) = mat.to_scale_rotation_translation();
+        Self {
+            scale,
+            position,
+            rotation,
+        }
     }
 }
 
@@ -159,6 +172,20 @@ impl Camera {
 }
 
 pub struct StaticMesh(pub MeshHandle);
+
+pub struct SkinnedMesh {
+    pub mesh: MeshHandle,
+    pub skeleton: SkeletonHandle,
+}
+
+impl SkinnedMesh {
+    pub fn new(mesh: MeshHandle, skeleton: &str) -> Self {
+        Self {
+            mesh,
+            skeleton: SkeletonHandle::PendingId(skeleton.to_owned()),
+        }
+    }
+}
 
 pub struct Material {
     pub diffuse_color: Vec3,

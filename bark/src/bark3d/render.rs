@@ -1,9 +1,10 @@
 use super::{Camera, DirectionalLight, FORWARD, Material, SkySettings, StaticMesh, UP};
 use crate::app::ResizeEvent;
-use crate::assets::Assets;
-use crate::bark3d::GlobalTransform;
+use crate::assets::{Assets, Handle};
+use crate::bark3d::model::{Animation, MAX_BONES, Skeleton};
+use crate::bark3d::{GlobalTransform, SkinnedMesh};
 use crate::ecs::{Commands, Observer, Query, Res, ResMut};
-use crate::gfx::mesh::{INDEX_FORMAT, MeshManager, Vertex};
+use crate::gfx::mesh::{INDEX_FORMAT, MeshManager, SkinnedVertex, StaticVertex};
 use crate::gfx::texture::TextureManager;
 use crate::gfx::{
     DEFAULT_BUFFER_SIZE, RenderContext, RenderFrame, SAMPLES, SURFACE_FORMAT, load_shader,
@@ -20,13 +21,16 @@ const SHADOW_MULTIVIEW_MASK: NonZero<u32> =
     NonZero::new(2u32.pow(NUM_SHADOW_CASCADES) - 1).unwrap();
 
 // todo: consider seperating out scene stuff
+// todo: deal with shader permutations nicely?
 pub struct RenderPipeline {
     uniform_buffer: wgpu::Buffer,
     light_buffer: wgpu::Buffer,
     scene_bind_group: wgpu::BindGroup,
     shadow_map_view: wgpu::TextureView,
     shadow_map_bind_group: wgpu::BindGroup,
-    main_pipeline: wgpu::RenderPipeline,
+    skeleton_bind_group_layout: wgpu::BindGroupLayout, // tmp
+    main_pipeline_static: wgpu::RenderPipeline,
+    main_pipeline_skinned: wgpu::RenderPipeline,
     shadow_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
 }
@@ -153,55 +157,85 @@ pub fn init_pipeline(
         ],
     });
 
+    let skeleton_bind_group_layout =
+        ctx.device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: None,
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
     let main_shader = load_shader(&ctx.device, &mut assets, "shaders/main.wesl");
-    let main_pipeline_layout = ctx
-        .device
-        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            bind_group_layouts: &[
-                Some(&scene_bind_group_layout),
-                Some(&textures.layout),
-                Some(&shadow_map_bind_group_layout),
-            ],
-            immediate_size: mem::size_of::<GPUObject>() as _,
-            label: None,
-        });
-    let main_pipeline = ctx
-        .device
-        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            layout: Some(&main_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &main_shader,
-                entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Some(Vertex::LAYOUT)],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &main_shader,
-                entry_point: Some("fs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: SURFACE_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: SAMPLES,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: None,
-            cache: None,
-            label: None,
-        });
+    let create_main_pipeline = |vs_entry, vs_buffers, bind_group_layouts| {
+        let main_pipeline_layout =
+            ctx.device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    bind_group_layouts,
+                    immediate_size: mem::size_of::<GPUObject>() as _,
+                    label: None,
+                });
+        ctx.device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                layout: Some(&main_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &main_shader,
+                    entry_point: Some(vs_entry),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: vs_buffers,
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &main_shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: SURFACE_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: SAMPLES,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview_mask: None,
+                cache: None,
+                label: None,
+            })
+    };
+    let bindings = [
+        Some(&scene_bind_group_layout),
+        Some(&textures.layout),
+        Some(&shadow_map_bind_group_layout),
+    ];
+    let main_pipeline_static =
+        create_main_pipeline("vs_static", &[Some(StaticVertex::LAYOUT)], &bindings);
+    let main_pipeline_skinned = create_main_pipeline(
+        "vs_skinned",
+        &[Some(SkinnedVertex::LAYOUT)],
+        &[
+            Some(&scene_bind_group_layout),
+            Some(&textures.layout),
+            Some(&shadow_map_bind_group_layout),
+            Some(&skeleton_bind_group_layout),
+        ],
+    );
 
     let shadow_shader = load_shader(&ctx.device, &mut assets, "shaders/shadow.wesl");
     let shadow_pipeline_layout =
@@ -219,7 +253,7 @@ pub fn init_pipeline(
                 module: &shadow_shader,
                 entry_point: Some("vs_shadow"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Some(Vertex::LAYOUT)],
+                buffers: &[Some(StaticVertex::LAYOUT)],
             },
             fragment: None,
             primitive: wgpu::PrimitiveState::default(),
@@ -293,7 +327,9 @@ pub fn init_pipeline(
         scene_bind_group,
         shadow_map_view,
         shadow_map_bind_group,
-        main_pipeline,
+        skeleton_bind_group_layout,
+        main_pipeline_static,
+        main_pipeline_skinned,
         shadow_pipeline,
         sky_pipeline,
     });
@@ -315,6 +351,7 @@ pub fn main_pass(
     textures: Res<TextureManager>,
     meshes: Res<MeshManager>,
     static_meshes: Query<(&GlobalTransform, &StaticMesh, &Material)>,
+    skinned_meshes: Query<(&GlobalTransform, &SkinnedMesh, &Material)>,
 ) {
     let Some((_, surface_view)) = frame.surface.as_ref() else {
         return;
@@ -346,25 +383,29 @@ pub fn main_pass(
         multiview_mask: None,
         label: None,
     });
-    main_pass.set_pipeline(&pipeline.main_pipeline);
     main_pass.set_bind_group(0, &pipeline.scene_bind_group, &[]);
     main_pass.set_bind_group(1, &textures.bind_group, &[]);
     main_pass.set_bind_group(2, &pipeline.shadow_map_bind_group, &[]);
-    main_pass.set_vertex_buffer(0, meshes.vertex_buffer.slice(..));
-    main_pass.set_index_buffer(meshes.index_buffer.slice(..), INDEX_FORMAT);
+    main_pass.set_vertex_buffer(0, meshes.vertex_buf.buffer.slice(..));
+    main_pass.set_index_buffer(meshes.index_buf.buffer.slice(..), INDEX_FORMAT);
+
+    main_pass.set_pipeline(&pipeline.main_pipeline_static);
     for (_, (transform, mesh, material)) in static_meshes.iter() {
         if let Some(mesh) = meshes.get(&mesh.0) {
-            let gpu_object = GPUObject {
-                transform: transform.0,
-                normal_transform: Mat3A::from_mat4(transform.0).inverse().transpose(),
-                diffuse_color: material.diffuse_color,
-                diffuse_id: material.diffuse_tex.map_or(0, |t| textures.get(t)),
-                pbr_values: material.pbr.get_arm_values(),
-                pbr_id: material.pbr.get_tex().map_or(0, |t| textures.get(t)),
-                normal_id: material.normal_tex.map_or(0, |t| textures.get(t)),
-            };
+            let gpu_object = GPUObject::create(transform.0, material, &textures);
             main_pass.set_immediates(0, unsafe { cast_bytes(&gpu_object) });
-            main_pass.draw_indexed(mesh.index_range(), mesh.vertex_range().start as _, 0..1);
+            main_pass.draw_indexed(mesh.index.range(), mesh.vertex.range().start as _, 0..1);
+        }
+    }
+    main_pass.set_pipeline(&pipeline.main_pipeline_skinned);
+    for (_, (transform, skinned_mesh, material)) in skinned_meshes.iter() {
+        if let Some(mesh) = meshes.get(&skinned_mesh.mesh)
+            && let SkeletonHandle::Uploaded { bind_group, .. } = &skinned_mesh.skeleton
+        {
+            let gpu_object = GPUObject::create(transform.0, material, &textures);
+            main_pass.set_immediates(0, unsafe { cast_bytes(&gpu_object) });
+            main_pass.set_bind_group(3, bind_group, &[]);
+            main_pass.draw_indexed(mesh.index.range(), mesh.vertex.range().start as _, 0..1);
         }
     }
     drop(main_pass);
@@ -377,7 +418,7 @@ pub fn shadow_pass(
     frame: Res<RenderFrame>,
     pipeline: Res<RenderPipeline>,
     meshes: Res<MeshManager>,
-    static_meshes: Query<(&GlobalTransform, &StaticMesh, &Material)>,
+    static_meshes: Query<(&GlobalTransform, &StaticMesh)>,
 ) {
     if frame.surface.is_none() {
         return;
@@ -403,12 +444,12 @@ pub fn shadow_pass(
     });
     shadow_pass.set_pipeline(&pipeline.shadow_pipeline);
     shadow_pass.set_bind_group(0, &pipeline.scene_bind_group, &[]);
-    shadow_pass.set_vertex_buffer(0, meshes.vertex_buffer.slice(..));
-    shadow_pass.set_index_buffer(meshes.index_buffer.slice(..), INDEX_FORMAT);
-    for (_, (transform, mesh, _)) in static_meshes.iter() {
+    shadow_pass.set_vertex_buffer(0, meshes.vertex_buf.buffer.slice(..));
+    shadow_pass.set_index_buffer(meshes.index_buf.buffer.slice(..), INDEX_FORMAT);
+    for (_, (transform, mesh)) in static_meshes.iter() {
         if let Some(mesh) = meshes.get(&mesh.0) {
             shadow_pass.set_immediates(0, unsafe { cast_bytes(&transform.0) });
-            shadow_pass.draw_indexed(mesh.index_range(), mesh.vertex_range().start as _, 0..1);
+            shadow_pass.draw_indexed(mesh.index.range(), mesh.vertex.range().start as _, 0..1);
         }
     }
     drop(shadow_pass);
@@ -626,6 +667,61 @@ fn fit_shadow_source_mat(camera_mat: Mat4, light_dir: Vec3) -> Mat4 {
     light_proj * light_view
 }
 
+pub enum SkeletonHandle {
+    PendingId(String),
+    PendingAsset(Handle<Skeleton>),
+    Uploaded {
+        skeleton: Skeleton,
+        // todo: generic way to manage ssbo allocations
+        buffer: wgpu::Buffer,
+        bind_group: wgpu::BindGroup,
+    },
+}
+
+pub fn process_skeletons(
+    ctx: Res<RenderContext>,
+    pipeline: Res<RenderPipeline>,
+    mut assets: ResMut<Assets>,
+    skinned_meshes: Query<(&mut SkinnedMesh,)>,
+) {
+    for (_, (skinned_mesh,)) in skinned_meshes.iter() {
+        match &skinned_mesh.skeleton {
+            SkeletonHandle::PendingId(id) => {
+                skinned_mesh.skeleton = SkeletonHandle::PendingAsset(assets.load(id))
+            }
+            SkeletonHandle::PendingAsset(handle) if let Some(skeleton) = handle.try_get() => {
+                let buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: None,
+                    size: mem::size_of::<GPUSkeleton>() as _,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &pipeline.skeleton_bind_group_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buffer.as_entire_binding(),
+                    }],
+                });
+                skinned_mesh.skeleton = SkeletonHandle::Uploaded {
+                    skeleton: skeleton.clone(),
+                    buffer,
+                    bind_group,
+                };
+            }
+            SkeletonHandle::Uploaded {
+                skeleton, buffer, ..
+            } => {
+                let skeleton = GPUSkeleton::create(skeleton);
+                ctx.queue
+                    .write_buffer(buffer, 0, unsafe { cast_bytes(&skeleton) })
+            }
+            _ => {}
+        }
+    }
+}
+
 #[repr(C)]
 struct GPUObject {
     transform: Mat4,
@@ -635,6 +731,20 @@ struct GPUObject {
     pbr_values: Vec3,
     pbr_id: u32,
     normal_id: u32,
+}
+
+impl GPUObject {
+    fn create(transform: Mat4, material: &Material, textures: &TextureManager) -> Self {
+        GPUObject {
+            transform,
+            normal_transform: Mat3A::from_mat4(transform).inverse().transpose(),
+            diffuse_color: material.diffuse_color,
+            diffuse_id: material.diffuse_tex.map_or(0, |t| textures.get(t)),
+            pbr_values: material.pbr.get_arm_values(),
+            pbr_id: material.pbr.get_tex().map_or(0, |t| textures.get(t)),
+            normal_id: material.normal_tex.map_or(0, |t| textures.get(t)),
+        }
+    }
 }
 
 #[repr(C)]
@@ -652,3 +762,54 @@ struct GPULight {
     tag: u32,
     color: Vec3,
 }
+
+#[repr(C)]
+struct GPUSkeleton {
+    bones: [Mat4; MAX_BONES as _],
+}
+
+impl GPUSkeleton {
+    fn create(skeleton: &Skeleton) -> Self {
+        let mut bones = [Mat4::IDENTITY; MAX_BONES as _];
+        for i in 0..skeleton.bones.len() as u32 {
+            let mut transform = skeleton.bones[i as usize].offset;
+
+            let mut next = Some(i);
+            while let Some(i) = next {
+                let bone = skeleton.bones[i as usize];
+                transform = bone.default_transform.as_mat4() * transform;
+                next = bone.parent;
+            }
+
+            bones[(i + 1) as usize] = transform;
+        }
+        Self { bones }
+    }
+}
+
+// impl GPUSkeleton {
+//     fn create(skeleton: &Skeleton, test_anim: &Animation) -> Self {
+//         let mut bones = [Mat4::IDENTITY; MAX_BONES as _];
+//         for i in 0..skeleton.bones.len() as u32 {
+//             let mut transform = skeleton.bones[i as usize].offset;
+
+//             let mut next = Some(i);
+//             while let Some(i) = next {
+//                 let bone = skeleton.bones[i as usize];
+//                 let bone_transform = match test_anim.channels.get(&i) {
+//                     Some(channel) => Mat4::from_scale_rotation_translation(
+//                         channel.scales[0].1,
+//                         channel.rotations[0].1,
+//                         channel.positions[0].1,
+//                     ),
+//                     None => bone.default_transform.as_mat4(),
+//                 };
+//                 transform = bone_transform * transform;
+//                 next = bone.parent;
+//             }
+
+//             bones[(i + 1) as usize] = transform;
+//         }
+//         Self { bones }
+//     }
+// }

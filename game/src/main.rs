@@ -1,7 +1,9 @@
 use bark::app::winit::keyboard::KeyCode;
 use bark::app::winit::window::CursorGrabMode;
 use bark::app::{Input, WindowHandle};
-use bark::bark3d::{self, Camera, DirectionalLight, Material, Parent, StaticMesh, Transform};
+use bark::bark3d::{
+    self, Camera, DirectionalLight, Material, Parent, SkinnedMesh, StaticMesh, Transform,
+};
 use bark::ecs::{Commands, IntoSystem, Query, Res, ResMut};
 use bark::gfx::mesh::MeshManager;
 use bark::gfx::texture::TextureManager;
@@ -81,6 +83,11 @@ fn scene(
         )
         .insert(StaticMesh(meshes.add("garfield.obj#defaultobject")))
         .insert(Material::default().diffuse_texture(textures.add("garfield.png")));
+    commands
+        .spawn()
+        .insert(Transform::default().position(Vec3::new(0.0, 0.0, -2.0)))
+        .insert(SkinnedMesh::new(meshes.add("fox.fbx#fox1"), "fox.fbx#skel"))
+        .insert(Material::default().diffuse_texture(textures.add("fox.png")));
     commands
         .spawn()
         .insert(Transform::default().scale(Vec3::splat(25.0)))

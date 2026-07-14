@@ -26,8 +26,11 @@ var shadow_map: texture_depth_2d_array;
 @group(2) @binding(1)
 var shadow_map_sampler: sampler_comparison;
 
+@group(3) @binding(0)
+var<uniform> skeleton_bones: array<mat4x4<f32>, 64>;
+
 @vertex
-fn vs_main(
+fn vs_static(
     @location(0) pos: vec3<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) normal: vec3<f32>,
@@ -39,6 +42,30 @@ fn vs_main(
         world_pos.xyz,
         uv,
         object.normal_transform * normal,
+        vec4(object.normal_transform * tangent.xyz, tangent.w)
+    );
+}
+
+@vertex
+fn vs_skinned(
+    @location(0) pos: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) normal: vec3<f32>,
+    @location(3) tangent: vec4<f32>,
+    @location(4) bone_indices: vec4<u32>,
+    @location(5) bone_weights: vec4<f32>,
+) -> VsOut {
+    let bone_transform =
+        skeleton_bones[bone_indices.x] * bone_weights.x +
+        skeleton_bones[bone_indices.y] * bone_weights.y +
+        skeleton_bones[bone_indices.z] * bone_weights.z +
+        skeleton_bones[bone_indices.w] * bone_weights.w;
+    let world_pos = object.transform * bone_transform * vec4(pos, 1.0);
+    return VsOut(
+        frame.camera_proj * frame.camera_view * world_pos,
+        world_pos.xyz,
+        uv,
+        object.normal_transform * normal, // todo: research
         vec4(object.normal_transform * tangent.xyz, tangent.w)
     );
 }
@@ -71,7 +98,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let roughness = clamp(pbr.g, 0.04, 1.0);
     let metallic = pbr.b;
 
-    let ambient = diffuse_color * 0.05 * ao;
+    let ambient = diffuse_color * 0.1 * ao;
 
     let shadow = shadow_factor(in.world_pos);
 

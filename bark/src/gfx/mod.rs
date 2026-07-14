@@ -172,14 +172,13 @@ pub fn extend_buffer(
     buffer: &mut wgpu::Buffer,
     offset: wgpu::BufferAddress,
     extend_size: wgpu::BufferAddress,
-) -> wgpu::QueueWriteBufferView {
+) -> Option<wgpu::QueueWriteBufferView> {
+    let write_size = NonZero::new(extend_size)?;
     let needed_size = offset + extend_size;
     if buffer.size() < needed_size {
         resize_buffer(device, encoder, buffer, needed_size, Some(offset));
     }
-    queue
-        .write_buffer_with(buffer, offset, NonZero::new(extend_size).unwrap())
-        .unwrap()
+    Some(queue.write_buffer_with(buffer, offset, write_size).unwrap())
 }
 
 pub fn during_frame(sys: Box<dyn System>) -> Box<dyn System> {

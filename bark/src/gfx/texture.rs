@@ -101,7 +101,7 @@ impl TextureManager {
                     return TextureHandle(0);
                 }
             };
-            self.slots[i] = TextureSlot::Pending(id.to_owned());
+            self.slots[i] = TextureSlot::PendingId(id.to_owned());
             TextureHandle(i as _)
         })
     }
@@ -114,7 +114,7 @@ impl TextureManager {
         let mut bindings_changed = false;
         for slot in &mut self.slots {
             match slot {
-                TextureSlot::Pending(id) => *slot = TextureSlot::PendingAsset(assets.load(id)),
+                TextureSlot::PendingId(id) => *slot = TextureSlot::PendingAsset(assets.load(id)),
                 TextureSlot::PendingAsset(handle) if let Some(tex) = handle.try_get() => {
                     debug!("upload texture {:?}", handle.id());
                     let mut tex_format = match tex.compression {
@@ -197,7 +197,7 @@ impl TextureManager {
 enum TextureSlot {
     Reserved,
     Empty,
-    Pending(String),
+    PendingId(String),
     PendingAsset(Handle<Texture>),
     Uploaded(wgpu::TextureView),
 }
