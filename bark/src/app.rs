@@ -20,6 +20,7 @@ static GLOBAL: tracy_client::ProfiledAllocator<std::alloc::System> =
 
 pub struct Startup;
 pub struct Update;
+pub struct FixedUpdate;
 pub struct Render;
 
 pub type WindowHandle = Arc<Window>;
@@ -68,7 +69,7 @@ impl ApplicationHandler for App {
         );
         self.world.insert_resource(window);
         self.world.insert_resource(Input::new());
-        self.world.insert_resource(UpdateTarget(60.0));
+        self.world.insert_resource(FixedUpdateTarget(60.0));
         self.world.run_schedule(Startup);
     }
 
@@ -106,14 +107,15 @@ impl ApplicationHandler for App {
                 self.last_frame = now;
                 self.accumulator += delta;
 
+                self.world.insert_resource(DeltaTime(delta));
+                self.world.run_schedule(Update);
+
                 let timestep = Duration::from_secs_f32(
-                    1.0 / self.world.get_resource::<UpdateTarget>().unwrap().0,
+                    1.0 / self.world.get_resource::<FixedUpdateTarget>().unwrap().0,
                 );
                 while self.accumulator >= timestep {
-                    self.world.run_schedule(Update);
+                    self.world.run_schedule(FixedUpdate);
                     self.accumulator -= timestep;
-                    let input = self.world.get_resource_mut::<Input>().unwrap();
-                    input.end_frame();
                 }
 
                 if !self.occluded {
@@ -122,6 +124,9 @@ impl ApplicationHandler for App {
                     #[cfg(feature = "tracy")]
                     tracy_client::frame_mark();
                 }
+
+                let input = self.world.get_resource_mut::<Input>().unwrap();
+                input.end_frame();
             }
             _ => {}
         }
@@ -149,7 +154,7 @@ pub struct ResizeEvent {
     pub height: u32,
 }
 
-pub struct UpdateTarget(pub f32);
+pub struct FixedUpdateTarget(pub f32);
 
 pub struct Input {
     keys_down: HashSet<KeyCode>,
@@ -195,3 +200,5 @@ impl Input {
         self.right_mouse
     }
 }
+
+pub struct DeltaTime(pub Duration);

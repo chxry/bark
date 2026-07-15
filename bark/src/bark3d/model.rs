@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
 
-pub const MAX_BONES: u32 = 64;
+pub const MAX_BONES: u32 = 100;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Skeleton {

@@ -101,17 +101,24 @@
   },
   "shaders/main.wesl": {
     "ty": "wesl",
-    "hash": "b9cca227921cfb9e",
+    "hash": "326a11c86ad7076e",
     "options": null
   },
   "shaders/shadow.wesl": {
     "ty": "wesl",
-    "hash": "6c383579d4e76781",
+    "hash": "081071cc3da9239c",
     "options": null
   },
   "shaders/sky.wesl": {
     "ty": "wesl",
     "hash": "949338038e5c9e90",
     "options": null
+  },
+  "test.fbx": {
+    "ty": "model",
+    "hash": "0e4d0b2b7bc14f23",
+    "options": {
+      "skinned": true
+    }
   }
 }

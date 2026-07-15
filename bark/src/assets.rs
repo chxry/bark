@@ -117,7 +117,8 @@ impl<T: Asset> Handle<T> {
     }
 
     fn load(&self, path: &Path) {
-        let _span = trace_span!("load asset", id = self.id(), type = any::type_name::<T>());
+        let _span =
+            trace_span!("load asset", id = self.id(), type = any::type_name::<T>()).entered();
         trace!("load asset from {:?}", path);
         let _ = self.0.1.set(T::read(File::open(path).unwrap()));
     }

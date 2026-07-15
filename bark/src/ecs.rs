@@ -51,8 +51,6 @@ impl World {
 
     pub fn insert_resource<T: Any + Send + Sync>(&mut self, data: T) {
         let id = TypeKey::of::<T>();
-        debug!("insert resource {:?}", id);
-
         self.resources.insert(id, Box::new(data));
     }
 

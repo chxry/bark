@@ -1,12 +1,12 @@
 use bark::app::winit::keyboard::KeyCode;
 use bark::app::winit::window::CursorGrabMode;
-use bark::app::{Input, WindowHandle};
+use bark::app::{DeltaTime, Input, WindowHandle};
 use bark::assets::Assets;
 use bark::bark3d::{
     self, AnimationState, Camera, DirectionalLight, Material, Parent, SkinnedMesh, StaticMesh,
     Transform,
 };
-use bark::ecs::{Commands, IntoSystem, Query, Res, ResMut};
+use bark::ecs::{Commands, IntoSystem, MainThread, Query, Res, ResMut};
 use bark::gfx::mesh::MeshManager;
 use bark::gfx::texture::TextureManager;
 use bark::math::{EulerRot, Quat, Vec3};
@@ -20,7 +20,8 @@ fn main() {
     assets::init(&mut app, assets_dir);
     bark3d::init(&mut app);
     app.world.insert_system::<app::Startup>(scene.into_system());
-    app.world.insert_system::<app::Update>(spinny.into_system());
+    app.world
+        .insert_system::<app::FixedUpdate>(spinny.into_system());
     app.world
         .insert_system::<app::Update>(update_camera.into_system());
     app.world
@@ -88,16 +89,44 @@ fn scene(
         )
         .insert(StaticMesh(meshes.add("garfield.obj#defaultobject")))
         .insert(Material::default().diffuse_texture(textures.add("garfield.png")));
+    // commands
+    //     .spawn()
+    //     .insert(Transform::default().position(Vec3::new(0.0, 0.0, -2.0)))
+    //     .insert(SkinnedMesh(meshes.add("fox.fbx#fox1")))
+    //     .insert(AnimationState {
+    //         skeleton: assets.load("fox.fbx#skel"),
+    //         animation: assets.load("fox.fbx#root|Run"),
+    //         progress_secs: 0.0,
+    //     })
+    //     .insert(Material::default().diffuse_texture(textures.add("fox.png")));
     commands
         .spawn()
         .insert(Transform::default().position(Vec3::new(0.0, 0.0, -2.0)))
-        .insert(SkinnedMesh(meshes.add("fox.fbx#fox1")))
+        .insert(SkinnedMesh(meshes.add("test.fbx#Beta_Surface")))
         .insert(AnimationState {
-            skeleton: assets.load("fox.fbx#skel"),
-            animation: assets.load("fox.fbx#root|Run"),
+            skeleton: assets.load("test.fbx#skel"),
+            animation: assets.load("test.fbx#Armature|mixamo.com"),
             progress_secs: 0.0,
         })
-        .insert(Material::default().diffuse_texture(textures.add("fox.png")));
+        .insert(
+            Material::default()
+                .diffuse_color(Vec3::new(1.0, 0.1, 0.1))
+                .pbr_values(0.2, 0.0),
+        );
+    commands
+        .spawn()
+        .insert(Transform::default().position(Vec3::new(0.0, 0.0, -2.0)))
+        .insert(SkinnedMesh(meshes.add("test.fbx#Beta_Joints")))
+        .insert(AnimationState {
+            skeleton: assets.load("test.fbx#skel"),
+            animation: assets.load("test.fbx#Armature|mixamo.com"),
+            progress_secs: 0.0,
+        })
+        .insert(
+            Material::default()
+                .diffuse_color(Vec3::new(0.5, 0.1, 0.1))
+                .pbr_values(0.2, 1.0),
+        );
     commands
         .spawn()
         .insert(Transform::default().scale(Vec3::splat(25.0)))
@@ -189,19 +218,23 @@ struct CameraController {
 fn update_camera(
     camera: Query<(&mut Transform, &mut Camera, &mut CameraController)>,
     input: Res<Input>,
+    dt: Res<DeltaTime>,
     window: Res<WindowHandle>,
+    _: MainThread,
 ) {
     let Some((_, (transform, camera, controller))) = camera.iter().next() else {
         return;
     };
 
+    let dt_secs = dt.0.as_secs_f32();
+
     let speed = if input.key_down(KeyCode::ShiftLeft) {
-        0.01
+        0.5
     } else {
-        0.04
-    };
-    let mouse_sens = 0.002;
-    let zoom_sens = 0.05;
+        2.5
+    } * dt_secs;
+    let mouse_sens = 0.125 * dt_secs;
+    let zoom_sens = 3.0 * dt_secs;
 
     if input.key_down(KeyCode::KeyW) {
         transform.position += transform.rotation * bark3d::FORWARD * speed;
@@ -239,6 +272,7 @@ fn update_camera(
 
 fn animate(
     input: Res<Input>,
+    dt: Res<DeltaTime>,
     mut assets: ResMut<Assets>,
     animations: Query<(&mut AnimationState,)>,
 ) {
@@ -254,8 +288,7 @@ fn animate(
     }
 
     if let Some(anim) = anim_state.animation.try_get() {
-        let dt = 1.0 / 60.0;
-        anim_state.progress_secs = (anim_state.progress_secs + dt)
+        anim_state.progress_secs = (anim_state.progress_secs + dt.0.as_secs_f32())
             .rem_euclid(anim.duration_ticks as f32 / anim.ticks_per_second);
     }
 }

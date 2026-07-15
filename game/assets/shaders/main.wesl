@@ -1,4 +1,4 @@
-import package::util::{pi, Object, FrameGlobals, Light, get_bone_transform};
+import package::util::{pi, Object, FrameGlobals, Light};
 enable wgpu_binding_array;
 
 struct VsOut {
@@ -27,7 +27,7 @@ var shadow_map: texture_depth_2d_array;
 var shadow_map_sampler: sampler_comparison;
 
 @group(3) @binding(0)
-var<storage, read> skeletons: array<array<mat4x4<f32>, 64>>;
+var<storage, read> skeletons: array<array<mat4x4<f32>, 100>>;
 
 @vertex
 fn vs_static(
@@ -55,7 +55,10 @@ fn vs_skinned(
     @location(4) bone_indices: vec4<u32>,
     @location(5) bone_weights: vec4<f32>,
 ) -> VsOut {
-    let bone_transform = get_bone_transform(skeletons[0], bone_indices, bone_weights);
+    let bone_transform = skeletons[0][bone_indices.x] * bone_weights.x +
+        skeletons[0][bone_indices.y] * bone_weights.y +
+        skeletons[0][bone_indices.z] * bone_weights.z +
+        skeletons[0][bone_indices.w] * bone_weights.w;
     let bone_normal_transform = mat3x3(bone_transform[0].xyz, bone_transform[1].xyz, bone_transform[2].xyz); // only works for uniform scaling
     let world_pos = object.transform * bone_transform * vec4(pos, 1.0);
     return VsOut(

@@ -740,7 +740,8 @@ pub fn extract_skeletons(
                 (Some(skel), Some(anim)) => Some(GPUSkeleton::create(
                     skel,
                     anim,
-                    (a.progress_secs * anim.ticks_per_second) as _,
+                    a.progress_secs * anim.ticks_per_second,
+                    // (a.progress_secs * anim.ticks_per_second).trunc(),
                 )),
                 _ => None,
             },
@@ -816,7 +817,7 @@ struct GPUSkeleton {
 }
 
 impl GPUSkeleton {
-    fn create(skeleton: &Skeleton, anim: &Animation, tick: u32) -> Self {
+    fn create(skeleton: &Skeleton, anim: &Animation, tick: f32) -> Self {
         let mut bones = [Mat4::IDENTITY; MAX_BONES as _];
         for i in 0..skeleton.bones.len() as u32 {
             let mut transform = skeleton.bones[i as usize].offset;
@@ -847,14 +848,14 @@ impl GPUSkeleton {
     }
 }
 
-fn get_keyframes<T: Copy>(keyframes: &[(u32, T)], tick: u32) -> (f32, T, T) {
-    match keyframes.partition_point(|(t, _)| *t <= tick) {
+fn get_keyframes<T: Copy>(keyframes: &[(u32, T)], tick: f32) -> (f32, T, T) {
+    match keyframes.partition_point(|(t, _)| *t <= tick as u32) {
         0 => (0.0, keyframes[0].1, keyframes[0].1),
         n if n == keyframes.len() => (0.0, keyframes[n - 1].1, keyframes[n - 1].1),
         n => {
             let (t0, a) = keyframes[n - 1];
             let (t1, b) = keyframes[n];
-            ((tick - t0) as f32 / (t1 - t0) as f32, a, b)
+            ((tick - t0 as f32) / (t1 - t0) as f32, a, b)
         }
     }
 }

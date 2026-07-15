@@ -1,4 +1,4 @@
-import package::util::{FrameGlobals, get_bone_transform};
+import package::util::{FrameGlobals};
 
 var<immediate> object_transform: mat4x4<f32>;
 
@@ -6,7 +6,7 @@ var<immediate> object_transform: mat4x4<f32>;
 var<uniform> frame: FrameGlobals;
 
 @group(1) @binding(0)
-var<storage, read> skeletons: array<array<mat4x4<f32>, 64>>;
+var<storage, read> skeletons: array<array<mat4x4<f32>, 100>>;
 
 @vertex
 fn vs_main(@location(0) pos: vec3<f32>, @builtin(view_index) index: u32) -> @builtin(position) vec4<f32> {
@@ -20,6 +20,11 @@ fn vs_skinned(
     @location(5) bone_weights: vec4<f32>,
      @builtin(view_index) index: u32
 ) -> @builtin(position) vec4<f32> {
-    return frame.shadow_source_mats[index] * object_transform * get_bone_transform(skeletons[0], bone_indices, bone_weights) * vec4(pos, 1.0);
+    let skeleton = skeletons[0];
+    let bone_transform = skeleton[bone_indices.x] * bone_weights.x +
+        skeleton[bone_indices.y] * bone_weights.y +
+        skeleton[bone_indices.z] * bone_weights.z +
+        skeleton[bone_indices.w] * bone_weights.w;
+    return frame.shadow_source_mats[index] * object_transform * bone_transform * vec4(pos, 1.0);
 }
 
