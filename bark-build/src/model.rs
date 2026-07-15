@@ -1,6 +1,6 @@
 use crate::{AssetProcessor, build_warn, create_frag};
 use bark::bark3d::Transform;
-use bark::bark3d::model::{AnimChannel, Animation, Bone, MAX_BONES, Skeleton};
+use bark::bark3d::model::{AnimChannel, AnimationClip, Bone, MAX_BONES, Skeleton};
 use bark::cast_bytes_vec;
 use bark::gfx::mesh::{Mesh, SkinnedVertex, StaticVertex};
 use bark::math::{Mat4, Quat, UVec4, Vec2, Vec3, Vec4};
@@ -86,7 +86,10 @@ impl AssetProcessor for ModelProcessor {
                 let mut vertices = vertices
                     .into_iter()
                     .map(|v| SkinnedVertex {
-                        base: v,
+                        pos: v.pos,
+                        uv: v.uv,
+                        normal: v.normal,
+                        tangent: v.tangent,
                         bone_indices: UVec4::ZERO,
                         bone_weights: Vec4::ZERO,
                     })
@@ -135,7 +138,7 @@ impl AssetProcessor for ModelProcessor {
             bincode::serialize_into(create_frag(&out_path, "skel"), &skeleton).unwrap();
 
             for anim in scene.animations {
-                let mut animation = Animation {
+                let mut animation = AnimationClip {
                     duration_ticks: anim.duration as _,
                     ticks_per_second: anim.ticks_per_second as _,
                     channels: HashMap::new(),

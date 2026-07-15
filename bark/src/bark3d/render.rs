@@ -1,8 +1,8 @@
+use super::animation::AnimationManager;
 use super::{Camera, DirectionalLight, FORWARD, Material, SkySettings, StaticMesh, UP};
+use super::{GlobalTransform, SkinnedMesh};
 use crate::app::ResizeEvent;
 use crate::assets::Assets;
-use crate::bark3d::model::{Animation, MAX_BONES, Skeleton};
-use crate::bark3d::{AnimationState, GlobalTransform, SkinnedMesh};
 use crate::ecs::{Commands, Observer, Query, Res, ResMut};
 use crate::gfx::mesh::{INDEX_FORMAT, MeshManager, SkinnedVertex, StaticVertex};
 use crate::gfx::texture::TextureManager;
@@ -10,7 +10,7 @@ use crate::gfx::{
     DEFAULT_BUFFER_SIZE, RenderContext, RenderFrame, SAMPLES, SURFACE_FORMAT, load_shader,
     resize_buffer,
 };
-use crate::math::{Mat3A, Mat4, Quat, Vec3};
+use crate::math::{Mat3A, Mat4, Vec3};
 use crate::{cast_bytes, cast_bytes_slice};
 use std::mem;
 use std::num::NonZero;
@@ -28,8 +28,6 @@ pub struct RenderPipeline {
     scene_bind_group: wgpu::BindGroup,
     shadow_map_view: wgpu::TextureView,
     shadow_map_bind_group: wgpu::BindGroup,
-    skeleton_buffer: wgpu::Buffer,
-    skeleton_bind_group: wgpu::BindGroup,
     main_pipeline_static: wgpu::RenderPipeline,
     main_pipeline_skinned: wgpu::RenderPipeline,
     shadow_pipeline_static: wgpu::RenderPipeline,
@@ -43,6 +41,8 @@ pub fn init_pipeline(
     textures: Res<TextureManager>,
     mut commands: Commands,
 ) {
+    let animations = AnimationManager::new(&ctx.device);
+
     let uniform_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
         size: mem::size_of::<GPUFrameGlobals>() as _,
         mapped_at_creation: false,
@@ -159,36 +159,6 @@ pub fn init_pipeline(
         ],
     });
 
-    let skeleton_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-        size: DEFAULT_BUFFER_SIZE,
-        mapped_at_creation: false,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        label: None,
-    });
-    let skeleton_bind_group_layout =
-        ctx.device
-            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: None,
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
-    let skeleton_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: None,
-        layout: &skeleton_bind_group_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: skeleton_buffer.as_entire_binding(),
-        }],
-    });
-
     let main_shader = load_shader(&ctx.device, &mut assets, "shaders/main.wesl");
     let create_main_pipeline = |vs_entry, vs_buffers, layout| {
         ctx.device
@@ -236,7 +206,7 @@ pub fn init_pipeline(
                     Some(&textures.layout),
                     Some(&shadow_map_bind_group_layout),
                 ],
-                immediate_size: mem::size_of::<GPUObject>() as _,
+                immediate_size: mem::size_of::<GPUObjectMain>() as _,
                 label: None,
             });
     let main_pipeline_static = create_main_pipeline(
@@ -251,9 +221,9 @@ pub fn init_pipeline(
                     Some(&scene_bind_group_layout),
                     Some(&textures.layout),
                     Some(&shadow_map_bind_group_layout),
-                    Some(&skeleton_bind_group_layout),
+                    Some(&animations.bind_group_layout),
                 ],
-                immediate_size: mem::size_of::<GPUObject>() as _,
+                immediate_size: mem::size_of::<GPUObjectMain>() as _,
                 label: None,
             });
     let main_pipeline_skinned = create_main_pipeline(
@@ -296,7 +266,7 @@ pub fn init_pipeline(
         ctx.device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 bind_group_layouts: &[Some(&scene_bind_group_layout)],
-                immediate_size: mem::size_of::<GPUObject>() as _,
+                immediate_size: mem::size_of::<GPUObjectShadow>() as _,
                 label: None,
             });
     let shadow_pipeline_static = create_shadow_pipeline(
@@ -309,9 +279,9 @@ pub fn init_pipeline(
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 bind_group_layouts: &[
                     Some(&scene_bind_group_layout),
-                    Some(&skeleton_bind_group_layout),
+                    Some(&animations.bind_group_layout),
                 ],
-                immediate_size: mem::size_of::<GPUObject>() as _,
+                immediate_size: mem::size_of::<GPUObjectShadow>() as _,
                 label: None,
             });
     let shadow_pipeline_skinned = create_shadow_pipeline(
@@ -367,14 +337,13 @@ pub fn init_pipeline(
         surface_config.width,
         surface_config.height,
     ));
+    commands.insert_resource(animations);
     commands.insert_resource(RenderPipeline {
         uniform_buffer,
         light_buffer,
         scene_bind_group,
         shadow_map_view,
         shadow_map_bind_group,
-        skeleton_buffer,
-        skeleton_bind_group,
         main_pipeline_static,
         main_pipeline_skinned,
         shadow_pipeline_static,
@@ -398,6 +367,7 @@ pub fn main_pass(
     framebuffer: Res<Framebuffer>,
     textures: Res<TextureManager>,
     meshes: Res<MeshManager>,
+    animations: Res<AnimationManager>,
     static_meshes: Query<(&GlobalTransform, &StaticMesh, &Material)>,
     skinned_meshes: Query<(&GlobalTransform, &SkinnedMesh, &Material)>,
 ) {
@@ -439,17 +409,22 @@ pub fn main_pass(
 
     main_pass.set_pipeline(&pipeline.main_pipeline_static);
     for (_, (transform, mesh, material)) in static_meshes.iter() {
-        if let Some(mesh) = meshes.get(&mesh.0) {
-            let gpu_object = GPUObject::create(transform.0, material, &textures);
+        if let Some(mesh) = meshes.get(mesh.0) {
+            let gpu_object = GPUObjectMain::create(transform.0, material, &textures, 0);
             main_pass.set_immediates(0, unsafe { cast_bytes(&gpu_object) });
             main_pass.draw_indexed(mesh.index.range(), mesh.vertex.start() as _, 0..1);
         }
     }
     main_pass.set_pipeline(&pipeline.main_pipeline_skinned);
-    main_pass.set_bind_group(3, &pipeline.skeleton_bind_group, &[]);
+    main_pass.set_bind_group(3, &animations.bind_group, &[]);
     for (_, (transform, skinned_mesh, material)) in skinned_meshes.iter() {
-        if let Some(mesh) = meshes.get(&skinned_mesh.0) {
-            let gpu_object = GPUObject::create(transform.0, material, &textures);
+        if let Some(mesh) = meshes.get(skinned_mesh.0) {
+            let gpu_object = GPUObjectMain::create(
+                transform.0,
+                material,
+                &textures,
+                animations.get_id(skinned_mesh.1),
+            );
             main_pass.set_immediates(0, unsafe { cast_bytes(&gpu_object) });
             main_pass.draw_indexed(mesh.index.range(), mesh.vertex.start() as _, 0..1);
         }
@@ -465,6 +440,7 @@ pub fn shadow_pass(
     frame: Res<RenderFrame>,
     pipeline: Res<RenderPipeline>,
     meshes: Res<MeshManager>,
+    animations: Res<AnimationManager>,
     static_meshes: Query<(&GlobalTransform, &StaticMesh)>,
     skinned_meshes: Query<(&GlobalTransform, &SkinnedMesh)>,
 ) {
@@ -496,17 +472,25 @@ pub fn shadow_pass(
 
     shadow_pass.set_pipeline(&pipeline.shadow_pipeline_static);
     for (_, (transform, mesh)) in static_meshes.iter() {
-        if let Some(mesh) = meshes.get(&mesh.0) {
-            shadow_pass.set_immediates(0, unsafe { cast_bytes(&transform.0) });
+        if let Some(mesh) = meshes.get(mesh.0) {
+            let gpu_object = GPUObjectShadow {
+                transform: transform.0,
+                skeleton_id: 0,
+            };
+            shadow_pass.set_immediates(0, unsafe { cast_bytes(&gpu_object) });
             shadow_pass.draw_indexed(mesh.index.range(), mesh.vertex.start() as _, 0..1);
         }
     }
 
     shadow_pass.set_pipeline(&pipeline.shadow_pipeline_skinned);
-    shadow_pass.set_bind_group(1, &pipeline.skeleton_bind_group, &[]);
+    shadow_pass.set_bind_group(1, &animations.bind_group, &[]);
     for (_, (transform, skinned_mesh)) in skinned_meshes.iter() {
-        if let Some(mesh) = meshes.get(&skinned_mesh.0) {
-            shadow_pass.set_immediates(0, unsafe { cast_bytes(&transform.0) });
+        if let Some(mesh) = meshes.get(skinned_mesh.0) {
+            let gpu_object = GPUObjectShadow {
+                transform: transform.0,
+                skeleton_id: animations.get_id(skinned_mesh.1),
+            };
+            shadow_pass.set_immediates(0, unsafe { cast_bytes(&gpu_object) });
             shadow_pass.draw_indexed(mesh.index.range(), mesh.vertex.start() as _, 0..1);
         }
     }
@@ -726,52 +710,8 @@ fn fit_shadow_source_mat(camera_mat: Mat4, light_dir: Vec3) -> Mat4 {
     light_proj * light_view
 }
 
-pub fn extract_skeletons(
-    ctx: Res<RenderContext>,
-    frame: Res<RenderFrame>,
-    mut pipeline: ResMut<RenderPipeline>,
-    animations: Query<(&AnimationState,)>,
-) {
-    // todo: this needs work since there could be multiple animationstates referencing the same skeleton
-    let skeletons = animations
-        .iter()
-        .filter_map(
-            |(_, (a,))| match (a.skeleton.try_get(), a.animation.try_get()) {
-                (Some(skel), Some(anim)) => Some(GPUSkeleton::create(
-                    skel,
-                    anim,
-                    a.progress_secs * anim.ticks_per_second,
-                    // (a.progress_secs * anim.ticks_per_second).trunc(),
-                )),
-                _ => None,
-            },
-        )
-        .collect::<Vec<_>>();
-
-    let skeleton_buf_size = (skeletons.len() * mem::size_of::<GPUSkeleton>()) as _;
-    if pipeline.skeleton_buffer.size() < skeleton_buf_size {
-        let mut encoder = ctx
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-
-        resize_buffer(
-            &ctx.device,
-            &mut encoder,
-            &mut pipeline.skeleton_buffer,
-            skeleton_buf_size,
-            None,
-        );
-
-        frame.submit(encoder.finish());
-    }
-    ctx.queue
-        .write_buffer(&pipeline.skeleton_buffer, 0, unsafe {
-            cast_bytes_slice(&skeletons)
-        });
-}
-
 #[repr(C)]
-struct GPUObject {
+struct GPUObjectMain {
     transform: Mat4,
     normal_transform: Mat3A,
     diffuse_color: Vec3,
@@ -779,10 +719,16 @@ struct GPUObject {
     pbr_values: Vec3,
     pbr_id: u32,
     normal_id: u32,
+    skeleton_id: u32, // todo: TEMP
 }
 
-impl GPUObject {
-    fn create(transform: Mat4, material: &Material, textures: &TextureManager) -> Self {
+impl GPUObjectMain {
+    fn create(
+        transform: Mat4,
+        material: &Material,
+        textures: &TextureManager,
+        skeleton_id: u32,
+    ) -> Self {
         Self {
             transform,
             normal_transform: Mat3A::from_mat4(transform).inverse().transpose(),
@@ -791,8 +737,15 @@ impl GPUObject {
             pbr_values: material.pbr.get_arm_values(),
             pbr_id: material.pbr.get_tex().map_or(0, |t| textures.get(t)),
             normal_id: material.normal_tex.map_or(0, |t| textures.get(t)),
+            skeleton_id,
         }
     }
+}
+
+#[repr(C)]
+struct GPUObjectShadow {
+    transform: Mat4,
+    skeleton_id: u32,
 }
 
 #[repr(C)]
@@ -809,53 +762,4 @@ struct GPULight {
     direction: Vec3,
     tag: u32,
     color: Vec3,
-}
-
-#[repr(C)]
-struct GPUSkeleton {
-    bones: [Mat4; MAX_BONES as _],
-}
-
-impl GPUSkeleton {
-    fn create(skeleton: &Skeleton, anim: &Animation, tick: f32) -> Self {
-        let mut bones = [Mat4::IDENTITY; MAX_BONES as _];
-        for i in 0..skeleton.bones.len() as u32 {
-            let mut transform = skeleton.bones[i as usize].offset;
-
-            let mut next = Some(i);
-            while let Some(i) = next {
-                let bone = skeleton.bones[i as usize];
-                let bone_transform = match anim.channels.get(&i) {
-                    Some(channel) => {
-                        let (t_pos, pos_a, pos_b) = get_keyframes(&channel.positions, tick);
-                        let (t_rot, rot_a, rot_b) = get_keyframes(&channel.rotations, tick);
-                        let (t_scale, scale_a, scale_b) = get_keyframes(&channel.scales, tick);
-                        Mat4::from_scale_rotation_translation(
-                            Vec3::lerp(scale_a, scale_b, t_scale),
-                            Quat::lerp(rot_a, rot_b, t_rot),
-                            Vec3::lerp(pos_a, pos_b, t_pos),
-                        )
-                    }
-                    None => bone.default_transform.as_mat4(),
-                };
-                transform = bone_transform * transform;
-                next = bone.parent;
-            }
-
-            bones[(i + 1) as usize] = transform;
-        }
-        Self { bones }
-    }
-}
-
-fn get_keyframes<T: Copy>(keyframes: &[(u32, T)], tick: f32) -> (f32, T, T) {
-    match keyframes.partition_point(|(t, _)| *t <= tick as u32) {
-        0 => (0.0, keyframes[0].1, keyframes[0].1),
-        n if n == keyframes.len() => (0.0, keyframes[n - 1].1, keyframes[n - 1].1),
-        n => {
-            let (t0, a) = keyframes[n - 1];
-            let (t1, b) = keyframes[n];
-            ((tick - t0 as f32) / (t1 - t0) as f32, a, b)
-        }
-    }
 }

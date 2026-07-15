@@ -36,7 +36,7 @@ impl MeshManager {
         })
     }
 
-    pub fn get(&self, handle: &MeshHandle) -> Option<&MeshAllocation> {
+    pub fn get(&self, handle: MeshHandle) -> Option<&MeshAllocation> {
         match &self.allocations[handle.0 as usize] {
             MeshSlot::Uploaded(h) => Some(h),
             _ => None,
@@ -227,7 +227,10 @@ impl StaticVertex {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct SkinnedVertex {
-    pub base: StaticVertex,
+    pub pos: Vec3,
+    pub uv: Vec2,
+    pub normal: Vec3,
+    pub tangent: Vec4,
     pub bone_indices: UVec4,
     pub bone_weights: Vec4,
 }

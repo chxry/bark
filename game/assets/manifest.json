@@ -1,20 +1,4 @@
 {
-  "fox.fbx": {
-    "ty": "model",
-    "hash": "e1da9fdca31abe34",
-    "options": {
-      "skinned": true
-    }
-  },
-  "fox.png": {
-    "ty": "texture",
-    "hash": "9a5425fb6fdf9163",
-    "options": {
-      "compression": "bc7",
-      "generate_mipmaps": true,
-      "mode": "srgb"
-    }
-  },
   "garfield.obj": {
     "ty": "model",
     "hash": "c1fdf586d4ceb623",
@@ -101,12 +85,12 @@
   },
   "shaders/main.wesl": {
     "ty": "wesl",
-    "hash": "326a11c86ad7076e",
+    "hash": "b8e2c7ce0dd17664",
     "options": null
   },
   "shaders/shadow.wesl": {
     "ty": "wesl",
-    "hash": "081071cc3da9239c",
+    "hash": "57d5259d34615c97",
     "options": null
   },
   "shaders/sky.wesl": {

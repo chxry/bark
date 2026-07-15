@@ -26,13 +26,13 @@ pub struct Bone {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Animation {
+pub struct AnimationClip {
     pub duration_ticks: u32,
     pub ticks_per_second: f32,
     pub channels: HashMap<u32, AnimChannel>,
 }
 
-impl Asset for Animation {
+impl Asset for AnimationClip {
     fn read<R: Read>(reader: R) -> Self {
         bincode::deserialize_from(reader).unwrap()
     }

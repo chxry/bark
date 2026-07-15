@@ -107,7 +107,10 @@ impl TextureManager {
     }
 
     pub fn get(&self, handle: TextureHandle) -> u32 {
-        handle.0
+        match self.slots[handle.0 as usize] {
+            TextureSlot::Uploaded(_) => handle.0,
+            _ => 0,
+        }
     }
 
     fn upload_pending(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, assets: &mut Assets) {

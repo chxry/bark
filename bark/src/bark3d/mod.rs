@@ -1,9 +1,9 @@
+pub mod animation;
 pub mod model;
 mod render;
 
+use self::animation::AnimationHandle;
 use crate::app::{self, App};
-use crate::assets::Handle;
-use crate::bark3d::model::{Animation, Skeleton};
 use crate::ecs::{Commands, EntityId, IntoSystem, Query};
 use crate::gfx;
 use crate::gfx::mesh::MeshHandle;
@@ -19,14 +19,15 @@ pub const RIGHT: Vec3 = Vec3::X;
 pub fn init(app: &mut App) {
     app.world
         .insert_system::<app::Startup>(render::init_pipeline.after(gfx::init_renderer));
+
+    app.world
+        .insert_system::<app::Render>(render::sky_pass.with(gfx::during_frame));
     app.world.insert_system::<app::Render>(
         render::shadow_pass
             .with(gfx::during_frame)
             // .after(render::extract_skeletons) todo: very concerning
             .after(propagate_transforms),
     );
-    app.world
-        .insert_system::<app::Render>(render::sky_pass.with(gfx::during_frame));
     app.world.insert_system::<app::Render>(
         render::main_pass
             .with(gfx::during_frame)
@@ -35,6 +36,7 @@ pub fn init(app: &mut App) {
             // .after(render::extract_skeletons)
             .after(propagate_transforms),
     );
+
     app.world.insert_system::<app::Render>(
         render::extract_lights
             .with(gfx::during_frame)
@@ -46,11 +48,15 @@ pub fn init(app: &mut App) {
             .after(propagate_transforms),
     );
     app.world
-        .insert_system::<app::Render>(render::extract_skeletons.with(gfx::during_frame));
+        .insert_system::<app::Render>(animation::extract_skeletons.with(gfx::during_frame));
+
     app.world
         .insert_system::<app::Render>(propagate_transforms.into_system());
     app.world
         .insert_system::<app::ResizeEvent>(render::resize_framebuffer.into_system());
+
+    app.world
+        .insert_system::<app::Update>(animation::progress_animations.into_system());
 
     app.world.insert_resource(SkySettings {
         sun_dir: Vec3::new(1.0, -1.0, 1.0).normalize(),
@@ -174,7 +180,7 @@ impl Camera {
 
 pub struct StaticMesh(pub MeshHandle);
 
-pub struct SkinnedMesh(pub MeshHandle);
+pub struct SkinnedMesh(pub MeshHandle, pub AnimationHandle);
 
 pub struct Material {
     pub diffuse_color: Vec3,
@@ -271,10 +277,4 @@ impl Default for DirectionalLight {
 
 pub struct SkySettings {
     pub sun_dir: Vec3,
-}
-
-pub struct AnimationState {
-    pub skeleton: Handle<Skeleton>,
-    pub animation: Handle<Animation>,
-    pub progress_secs: f32,
 }

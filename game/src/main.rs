@@ -2,9 +2,9 @@ use bark::app::winit::keyboard::KeyCode;
 use bark::app::winit::window::CursorGrabMode;
 use bark::app::{DeltaTime, Input, WindowHandle};
 use bark::assets::Assets;
+use bark::bark3d::animation::AnimationManager;
 use bark::bark3d::{
-    self, AnimationState, Camera, DirectionalLight, Material, Parent, SkinnedMesh, StaticMesh,
-    Transform,
+    self, Camera, DirectionalLight, Material, Parent, SkinnedMesh, StaticMesh, Transform,
 };
 use bark::ecs::{Commands, IntoSystem, MainThread, Query, Res, ResMut};
 use bark::gfx::mesh::MeshManager;
@@ -24,8 +24,6 @@ fn main() {
         .insert_system::<app::FixedUpdate>(spinny.into_system());
     app.world
         .insert_system::<app::Update>(update_camera.into_system());
-    app.world
-        .insert_system::<app::Update>(animate.into_system());
     app.run();
 }
 
@@ -34,6 +32,7 @@ struct Spin;
 fn scene(
     mut textures: ResMut<TextureManager>,
     mut meshes: ResMut<MeshManager>,
+    mut animations: ResMut<AnimationManager>,
     mut assets: ResMut<Assets>,
     mut commands: Commands,
 ) {
@@ -89,25 +88,15 @@ fn scene(
         )
         .insert(StaticMesh(meshes.add("garfield.obj#defaultobject")))
         .insert(Material::default().diffuse_texture(textures.add("garfield.png")));
-    // commands
-    //     .spawn()
-    //     .insert(Transform::default().position(Vec3::new(0.0, 0.0, -2.0)))
-    //     .insert(SkinnedMesh(meshes.add("fox.fbx#fox1")))
-    //     .insert(AnimationState {
-    //         skeleton: assets.load("fox.fbx#skel"),
-    //         animation: assets.load("fox.fbx#root|Run"),
-    //         progress_secs: 0.0,
-    //     })
-    //     .insert(Material::default().diffuse_texture(textures.add("fox.png")));
+
+    let anim_test = animations.add(
+        assets.load("test.fbx#skel"),
+        assets.load("test.fbx#Armature|mixamo.com"),
+    );
     commands
         .spawn()
         .insert(Transform::default().position(Vec3::new(0.0, 0.0, -2.0)))
-        .insert(SkinnedMesh(meshes.add("test.fbx#Beta_Surface")))
-        .insert(AnimationState {
-            skeleton: assets.load("test.fbx#skel"),
-            animation: assets.load("test.fbx#Armature|mixamo.com"),
-            progress_secs: 0.0,
-        })
+        .insert(SkinnedMesh(meshes.add("test.fbx#Beta_Surface"), anim_test))
         .insert(
             Material::default()
                 .diffuse_color(Vec3::new(1.0, 0.1, 0.1))
@@ -116,17 +105,13 @@ fn scene(
     commands
         .spawn()
         .insert(Transform::default().position(Vec3::new(0.0, 0.0, -2.0)))
-        .insert(SkinnedMesh(meshes.add("test.fbx#Beta_Joints")))
-        .insert(AnimationState {
-            skeleton: assets.load("test.fbx#skel"),
-            animation: assets.load("test.fbx#Armature|mixamo.com"),
-            progress_secs: 0.0,
-        })
+        .insert(SkinnedMesh(meshes.add("test.fbx#Beta_Joints"), anim_test))
         .insert(
             Material::default()
                 .diffuse_color(Vec3::new(0.5, 0.1, 0.1))
                 .pbr_values(0.2, 1.0),
         );
+
     commands
         .spawn()
         .insert(Transform::default().scale(Vec3::splat(25.0)))
@@ -268,27 +253,4 @@ fn update_camera(
         controller.pitch = controller.pitch.clamp(-FRAC_PI_2 + 0.01, FRAC_PI_2 - 0.01);
     }
     transform.rotation = Quat::from_euler(EulerRot::YXZ, controller.yaw, controller.pitch, 0.0);
-}
-
-fn animate(
-    input: Res<Input>,
-    dt: Res<DeltaTime>,
-    mut assets: ResMut<Assets>,
-    animations: Query<(&mut AnimationState,)>,
-) {
-    let Some((_, (anim_state,))) = animations.iter().next() else {
-        return;
-    };
-    if input.key_pressed(KeyCode::Digit1) {
-        anim_state.animation = assets.load("fox.fbx#root|Run");
-    } else if input.key_pressed(KeyCode::Digit2) {
-        anim_state.animation = assets.load("fox.fbx#root|Survey");
-    } else if input.key_pressed(KeyCode::Digit3) {
-        anim_state.animation = assets.load("fox.fbx#root|Walk");
-    }
-
-    if let Some(anim) = anim_state.animation.try_get() {
-        anim_state.progress_secs = (anim_state.progress_secs + dt.0.as_secs_f32())
-            .rem_euclid(anim.duration_ticks as f32 / anim.ticks_per_second);
-    }
 }

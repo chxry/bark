@@ -1,5 +1,16 @@
-import package::util::{pi, Object, FrameGlobals, Light};
+import package::util::{pi, FrameGlobals, Light};
 enable wgpu_binding_array;
+
+struct Object {
+    transform: mat4x4<f32>,
+    normal_transform: mat3x3<f32>,
+    diffuse_color: vec3<f32>,
+    diffuse_id: u32,
+    pbr_values: vec3<f32>,
+    pbr_id: u32,
+    normal_id: u32,
+    skeleton_id: u32
+}
 
 struct VsOut {
     @builtin(position) pos: vec4<f32>,
@@ -55,10 +66,11 @@ fn vs_skinned(
     @location(4) bone_indices: vec4<u32>,
     @location(5) bone_weights: vec4<f32>,
 ) -> VsOut {
-    let bone_transform = skeletons[0][bone_indices.x] * bone_weights.x +
-        skeletons[0][bone_indices.y] * bone_weights.y +
-        skeletons[0][bone_indices.z] * bone_weights.z +
-        skeletons[0][bone_indices.w] * bone_weights.w;
+    let skeleton = skeletons[object.skeleton_id];
+    let bone_transform = skeleton[bone_indices.x] * bone_weights.x +
+        skeleton[bone_indices.y] * bone_weights.y +
+        skeleton[bone_indices.z] * bone_weights.z +
+        skeleton[bone_indices.w] * bone_weights.w;
     let bone_normal_transform = mat3x3(bone_transform[0].xyz, bone_transform[1].xyz, bone_transform[2].xyz); // only works for uniform scaling
     let world_pos = object.transform * bone_transform * vec4(pos, 1.0);
     return VsOut(
