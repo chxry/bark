@@ -113,20 +113,16 @@ impl AssetProcessor for ModelProcessor {
                     }
                 }
 
-                unsafe {
-                    Mesh {
-                        vertex_data: cast_bytes_vec(vertices),
-                        index_data: cast_bytes_vec(indices),
-                        vertex_stride: mem::size_of::<SkinnedVertex>() as _,
-                    }
+                Mesh {
+                    vertex_data: cast_bytes_vec(vertices),
+                    index_data: cast_bytes_vec(indices),
+                    vertex_stride: mem::size_of::<SkinnedVertex>() as _,
                 }
             } else {
-                unsafe {
-                    Mesh {
-                        vertex_data: cast_bytes_vec(vertices),
-                        index_data: cast_bytes_vec(indices),
-                        vertex_stride: mem::size_of::<StaticVertex>() as _,
-                    }
+                Mesh {
+                    vertex_data: cast_bytes_vec(vertices),
+                    index_data: cast_bytes_vec(indices),
+                    vertex_stride: mem::size_of::<StaticVertex>() as _,
                 }
             };
 

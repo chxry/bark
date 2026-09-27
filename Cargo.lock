@@ -249,6 +249,7 @@ name = "bark"
 version = "0.2.0"
 dependencies = [
  "bincode",
+ "dear-imgui-rs",
  "glam",
  "hex",
  "pollster",
@@ -702,6 +703,40 @@ name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
+
+[[package]]
+name = "dear-imgui-build-support"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da45ea4739530b7ff801e45f9b82adfefd0a2c0e5f22dcefaac6e1d3439d251e"
+
+[[package]]
+name = "dear-imgui-rs"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e92ab972ec7e0444a22305814eacbe67192b8df612fac862f7f80e8fd496a40"
+dependencies = [
+ "bitflags 2.13.0",
+ "cfg-if",
+ "dear-imgui-sys",
+ "mint",
+ "parking_lot",
+ "thiserror 2.0.18",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "dear-imgui-sys"
+version = "0.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4491520c1aee546146ffbe6f56ad073008dfff7f59a4ef1e951e266b2444d156"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "dear-imgui-build-support",
+ "mint",
+]
 
 [[package]]
 name = "derivative"
@@ -2012,6 +2047,12 @@ dependencies = [
  "adler2",
  "simd-adler32",
 ]
+
+[[package]]
+name = "mint"
+version = "0.5.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e53debba6bda7a793e5f99b8dacf19e626084f525f7829104ba9898f367d85ff"
 
 [[package]]
 name = "mio"

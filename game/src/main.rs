@@ -1,6 +1,6 @@
 use bark::app::winit::keyboard::KeyCode;
 use bark::app::winit::window::CursorGrabMode;
-use bark::app::{DeltaTime, Input, WindowHandle};
+use bark::app::{self, DeltaTime, Input, WindowHandle};
 use bark::assets::Assets;
 use bark::bark3d::animation::AnimationManager;
 use bark::bark3d::{
@@ -10,20 +10,19 @@ use bark::ecs::{Commands, IntoSystem, MainThread, Query, Res, ResMut};
 use bark::gfx::mesh::MeshManager;
 use bark::gfx::texture::TextureManager;
 use bark::math::{EulerRot, Quat, Vec3};
-use bark::{app, assets, gfx};
 use std::f32::consts::FRAC_PI_2;
 
 fn main() {
     let assets_dir = env!("CARGO_MANIFEST_DIR").to_owned() + "/assets";
     let mut app = bark::App::new();
-    gfx::init(&mut app);
-    assets::init(&mut app, assets_dir);
-    bark3d::init(&mut app);
+    bark3d::init(&mut app, assets_dir);
     app.world.insert_system::<app::Startup>(scene.into_system());
     app.world
         .insert_system::<app::FixedUpdate>(spinny.into_system());
     app.world
         .insert_system::<app::Update>(update_camera.into_system());
+    app.world
+        .insert_system::<app::Update>(update_animations.into_system());
     app.run();
 }
 
@@ -253,4 +252,12 @@ fn update_camera(
         controller.pitch = controller.pitch.clamp(-FRAC_PI_2 + 0.01, FRAC_PI_2 - 0.01);
     }
     transform.rotation = Quat::from_euler(EulerRot::YXZ, controller.yaw, controller.pitch, 0.0);
+}
+
+fn update_animations(input: Res<Input>, mut animations: ResMut<AnimationManager>) {
+    if input.key_pressed(KeyCode::Space) {
+        for anim_state in &mut animations.animations {
+            anim_state.playing = !anim_state.playing;
+        }
+    }
 }

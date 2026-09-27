@@ -3,6 +3,7 @@ pub mod assets;
 pub mod bark3d;
 pub mod ecs;
 pub mod gfx;
+pub mod ui;
 
 use std::any::{self, Any, TypeId};
 use std::hash::{Hash, Hasher};
@@ -44,18 +45,16 @@ impl fmt::Debug for TypeKey {
     }
 }
 
-/// safety: `T` shouldn't contain any padding
-pub unsafe fn cast_bytes_slice<T>(x: &[T]) -> &[u8] {
+// safety: for `cast_x`, `T` shouldn't contain any padding
+pub fn cast_bytes_slice<T>(x: &[T]) -> &[u8] {
     unsafe { slice::from_raw_parts(x.as_ptr() as _, mem::size_of_val(x)) }
 }
 
-/// safety: `T` shouldn't contain any padding
-pub unsafe fn cast_bytes<T>(x: &T) -> &[u8] {
-    unsafe { cast_bytes_slice(slice::from_ref(x)) }
+pub fn cast_bytes<T>(x: &T) -> &[u8] {
+    cast_bytes_slice(slice::from_ref(x))
 }
 
-/// safety: `T` shouldn't contain any padding
-pub unsafe fn cast_bytes_vec<T>(x: Vec<T>) -> Vec<u8> {
+pub fn cast_bytes_vec<T>(x: Vec<T>) -> Vec<u8> {
     let (ptr, len, cap) = x.into_raw_parts();
     unsafe {
         Vec::from_raw_parts(

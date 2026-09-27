@@ -93,11 +93,16 @@ impl MeshManager {
                 let mesh = &handle.get();
                 self.vertex_buf.upload(
                     vertex_view.as_mut().unwrap(),
+                    vertex_base,
                     &alloc.vertex,
                     &mesh.vertex_data,
                 );
-                self.index_buf
-                    .upload(index_view.as_mut().unwrap(), &alloc.index, &mesh.index_data);
+                self.index_buf.upload(
+                    index_view.as_mut().unwrap(),
+                    index_base,
+                    &alloc.index,
+                    &mesh.index_data,
+                );
 
                 self.allocations[i] = MeshSlot::Uploaded(alloc);
             }
@@ -167,8 +172,14 @@ impl Allocator {
         )
     }
 
-    fn upload(&mut self, view: &mut wgpu::QueueWriteBufferView, alloc: &Allocation, data: &[u8]) {
-        view.slice(alloc.start as usize..(alloc.start + alloc.len) as _)
+    fn upload(
+        &mut self,
+        view: &mut wgpu::QueueWriteBufferView,
+        base: wgpu::BufferAddress,
+        alloc: &Allocation,
+        data: &[u8],
+    ) {
+        view.slice((alloc.start - base) as usize..(alloc.start - base + alloc.len) as _)
             .copy_from_slice(data);
     }
 }

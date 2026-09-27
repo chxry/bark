@@ -1,22 +1,26 @@
 pub mod animation;
 pub mod model;
-mod render;
+pub mod render;
 
 use self::animation::AnimationHandle;
 use crate::app::{self, App};
 use crate::ecs::{Commands, EntityId, IntoSystem, Query};
-use crate::gfx;
 use crate::gfx::mesh::MeshHandle;
 use crate::gfx::texture::TextureHandle;
 use crate::math::{EulerRot, Mat4, Quat, Vec3};
+use crate::{assets, gfx, ui};
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
+use std::path::PathBuf;
 
 pub const UP: Vec3 = Vec3::Y;
 pub const FORWARD: Vec3 = Vec3::NEG_Z;
 pub const RIGHT: Vec3 = Vec3::X;
 
-pub fn init(app: &mut App) {
+pub fn init<P: Into<PathBuf>>(app: &mut App, assets_dir: P) {
+    gfx::init(app);
+    assets::init(app, assets_dir);
+    // ui::init(app);
     app.world
         .insert_system::<app::Startup>(render::init_pipeline.after(gfx::init_renderer));
 

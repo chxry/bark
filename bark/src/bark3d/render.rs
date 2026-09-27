@@ -411,7 +411,7 @@ pub fn main_pass(
     for (_, (transform, mesh, material)) in static_meshes.iter() {
         if let Some(mesh) = meshes.get(mesh.0) {
             let gpu_object = GPUObjectMain::create(transform.0, material, &textures, 0);
-            main_pass.set_immediates(0, unsafe { cast_bytes(&gpu_object) });
+            main_pass.set_immediates(0, cast_bytes(&gpu_object));
             main_pass.draw_indexed(mesh.index.range(), mesh.vertex.start() as _, 0..1);
         }
     }
@@ -425,7 +425,7 @@ pub fn main_pass(
                 &textures,
                 animations.get_id(skinned_mesh.1),
             );
-            main_pass.set_immediates(0, unsafe { cast_bytes(&gpu_object) });
+            main_pass.set_immediates(0, cast_bytes(&gpu_object));
             main_pass.draw_indexed(mesh.index.range(), mesh.vertex.start() as _, 0..1);
         }
     }
@@ -477,7 +477,7 @@ pub fn shadow_pass(
                 transform: transform.0,
                 skeleton_id: 0,
             };
-            shadow_pass.set_immediates(0, unsafe { cast_bytes(&gpu_object) });
+            shadow_pass.set_immediates(0, cast_bytes(&gpu_object));
             shadow_pass.draw_indexed(mesh.index.range(), mesh.vertex.start() as _, 0..1);
         }
     }
@@ -490,7 +490,7 @@ pub fn shadow_pass(
                 transform: transform.0,
                 skeleton_id: animations.get_id(skinned_mesh.1),
             };
-            shadow_pass.set_immediates(0, unsafe { cast_bytes(&gpu_object) });
+            shadow_pass.set_immediates(0, cast_bytes(&gpu_object));
             shadow_pass.draw_indexed(mesh.index.range(), mesh.vertex.start() as _, 0..1);
         }
     }
@@ -580,9 +580,8 @@ pub fn extract_lights(
 
         frame.submit(encoder.finish());
     }
-    ctx.queue.write_buffer(&pipeline.light_buffer, 0, unsafe {
-        cast_bytes_slice(&lights)
-    });
+    ctx.queue
+        .write_buffer(&pipeline.light_buffer, 0, cast_bytes_slice(&lights));
 }
 
 pub fn extract_frame_globals(
@@ -632,9 +631,8 @@ pub fn extract_frame_globals(
         shadow_source_mats,
         camera_pos: camera_transform.position(),
     };
-    ctx.queue.write_buffer(&pipeline.uniform_buffer, 0, unsafe {
-        cast_bytes(&frame_globals)
-    });
+    ctx.queue
+        .write_buffer(&pipeline.uniform_buffer, 0, cast_bytes(&frame_globals));
 }
 
 pub struct Framebuffer {

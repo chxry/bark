@@ -98,6 +98,11 @@
     "hash": "949338038e5c9e90",
     "options": null
   },
+  "shaders/ui.wesl": {
+    "ty": "wesl",
+    "hash": "34e57e068ceb9d3d",
+    "options": null
+  },
   "test.fbx": {
     "ty": "model",
     "hash": "0e4d0b2b7bc14f23",

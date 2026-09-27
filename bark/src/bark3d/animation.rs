@@ -14,7 +14,7 @@ pub struct AnimationManager {
     buffer: wgpu::Buffer,
     pub bind_group_layout: wgpu::BindGroupLayout,
     pub bind_group: wgpu::BindGroup,
-    animations: Vec<AnimationState>,
+    pub animations: Vec<AnimationState>,
 }
 
 impl AnimationManager {
@@ -63,6 +63,7 @@ impl AnimationManager {
             skeleton,
             clip,
             progress_secs: 0.0,
+            playing: true,
         });
         AnimationHandle((self.animations.len() - 1) as _)
     }
@@ -76,6 +77,7 @@ pub struct AnimationState {
     pub skeleton: Handle<Skeleton>,
     pub clip: Handle<AnimationClip>,
     pub progress_secs: f32,
+    pub playing: bool,
 }
 
 pub fn extract_skeletons(
@@ -115,14 +117,15 @@ pub fn extract_skeletons(
 
         frame.submit(encoder.finish());
     }
-    ctx.queue.write_buffer(&animations.buffer, 0, unsafe {
-        cast_bytes_slice(&skeletons)
-    });
+    ctx.queue
+        .write_buffer(&animations.buffer, 0, cast_bytes_slice(&skeletons));
 }
 
 pub fn progress_animations(dt: Res<DeltaTime>, mut animations: ResMut<AnimationManager>) {
     for anim_state in &mut animations.animations {
-        if let Some(clip) = anim_state.clip.try_get() {
+        if anim_state.playing
+            && let Some(clip) = anim_state.clip.try_get()
+        {
             anim_state.progress_secs = (anim_state.progress_secs + dt.0.as_secs_f32())
                 .rem_euclid(clip.duration_ticks as f32 / clip.ticks_per_second);
         }
